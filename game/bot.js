@@ -4,14 +4,16 @@
  * Simple heuristic AI for Bürge.
  *
  * Strategy:
- *   • Attack: swap the trump VII if offered (gain a stronger trump), then lead
- *     the weakest card, preferring non-trumps so trumps are kept for defence.
- *   • Defend: beat with the cheapest card that works, preferring non-trumps.
- *     If the only way to beat a weak attack is to burn a strong trump, and our
- *     hand is comfortable, just take the card instead.
+ *   • Attack: swap the trump VII if offered, then lead the cheapest legal
+ *     attack set, preferring sets that shed more cards and avoid trumps.
+ *   • Defend: check whether every currently-undefended slot can be beaten at
+ *     once (bipartite matching via engine.findFullDefense). If so, play the
+ *     next assigned defend card — unless it means burning an expensive trump
+ *     on a cheap single attack while the hand is already comfortable, in
+ *     which case just take. If no full defense exists, take.
  */
 
-const { legalMoves } = require('./engine');
+const { legalMoves, findFullDefense } = require('./engine');
 const { cardSuit, strength } = require('./deck');
 
 function cardScore(card, trumpSuit) {
@@ -19,49 +21,60 @@ function cardScore(card, trumpSuit) {
   return strength(card) + (cardSuit(card) === trumpSuit ? 100 : 0);
 }
 
+function setScore(cards, trumpSuit) {
+  const total = cards.reduce((sum, c) => sum + cardScore(c, trumpSuit), 0);
+  return total - cards.length * 8; // reward shedding more cards per move
+}
+
 function chooseMove(state, playerIndex) {
   const moves = legalMoves(state, playerIndex);
   if (moves.length === 0) return null;
 
   const trumpSuit = state.trumpSuit;
-  const attackMoves = moves.filter((m) => m.type === 'attack');
-  const defendMoves = moves.filter((m) => m.type === 'defend');
-  const canTake = moves.some((m) => m.type === 'take');
-  const canSwap = moves.some((m) => m.type === 'swap7');
+  const swapMove = moves.find((m) => m.type === 'swap7');
+  if (swapMove) return swapMove;
 
-  // Attacking.
-  if (attackMoves.length > 0 || canSwap) {
-    if (canSwap) return { type: 'swap7' };
-    attackMoves.sort(
-      (a, b) => cardScore(a.card, trumpSuit) - cardScore(b.card, trumpSuit)
-    );
-    return attackMoves[0];
+  const attackMoves = moves.filter((m) => m.type === 'attack');
+  if (attackMoves.length > 0) {
+    const nonTrumpSets = attackMoves.filter((m) => m.cards.every((c) => cardSuit(c) !== trumpSuit));
+    const pool = nonTrumpSets.length > 0 ? nonTrumpSets : attackMoves;
+    pool.sort((a, b) => setScore(a.cards, trumpSuit) - setScore(b.cards, trumpSuit));
+    return pool[0];
   }
 
   // Defending.
-  if (defendMoves.length > 0) {
-    defendMoves.sort(
-      (a, b) => cardScore(a.card, trumpSuit) - cardScore(b.card, trumpSuit)
-    );
-    const cheapest = defendMoves[0];
-    const attackCard = state.table.attack;
+  const canTake = moves.some((m) => m.type === 'take');
+  const undefendedSlots = state.table.slots
+    .map((s, i) => ({ attack: s.attack, i }))
+    .filter((_, idx) => state.table.slots[idx].defense == null);
+  const hand = state.players[playerIndex].hand;
+  const fullDefense = findFullDefense(
+    undefendedSlots.map((s) => s.attack),
+    hand,
+    trumpSuit
+  );
 
-    // Spend low trumps freely; only hoard EXPENSIVE trumps (Alsó and up) against
-    // a cheap non-trump attack — and even then only with a comfortable hand.
-    // (Hoarding every trump lets cheap cards circulate forever, so we don't.)
-    const cheapestIsTrump = cardSuit(cheapest.card) === trumpSuit;
-    const trumpCostHigh = cheapestIsTrump && strength(cheapest.card) >= 4; // >= Alsó
-    const attackIsCheapNonTrump =
-      cardSuit(attackCard) !== trumpSuit && strength(attackCard) <= 2; // <= IX
-    const hand = state.players[playerIndex].hand;
-    if (canTake && trumpCostHigh && attackIsCheapNonTrump && hand.length <= 5) {
-      return { type: 'take' };
-    }
-    return cheapest;
+  if (!fullDefense) {
+    if (canTake) return { type: 'take' };
+    const defendMoves = moves.filter((m) => m.type === 'defend');
+    return defendMoves[0] || { type: 'take' };
   }
 
-  // No way to beat — take it.
-  return { type: 'take' };
+  const slot0 = undefendedSlots[0];
+  const card0 = fullDefense[0];
+  const beatingWithTrump = cardSuit(card0) === trumpSuit;
+  const trumpCostHigh = beatingWithTrump && strength(card0) >= 4; // >= Alsó
+  const attackIsCheapNonTrump = cardSuit(slot0.attack) !== trumpSuit && strength(slot0.attack) <= 2; // <= IX
+  if (
+    canTake &&
+    trumpCostHigh &&
+    attackIsCheapNonTrump &&
+    undefendedSlots.length === 1 &&
+    hand.length <= 5
+  ) {
+    return { type: 'take' };
+  }
+  return { type: 'defend', slot: slot0.i, card: card0 };
 }
 
 module.exports = { chooseMove };

@@ -10,8 +10,40 @@
   let lastLobby = null;
   let lastView = null;
 
+  // Flying-card animation duration — one shared value for every kind of card
+  // move (attack, defend, discard, pickup), for every player. Adjustable from
+  // the menu; applied as a CSS custom property so JS timing and the CSS
+  // transition never drift apart.
+  let ANIM_MS = 900;
+  function clampAnim(ms) {
+    return Math.max(300, Math.min(2500, Math.round(ms) || 900));
+  }
+  function applyAnimSpeed(ms) {
+    ANIM_MS = clampAnim(ms);
+    document.documentElement.style.setProperty('--anim-dur', ANIM_MS + 'ms');
+    localStorage.setItem('burge_anim_ms', String(ANIM_MS));
+    const sel = $('anim-speed');
+    if (sel) sel.value = String(ANIM_MS);
+  }
+  function stagger(i) {
+    return i * Math.round(ANIM_MS * 0.14);
+  }
+  let selectedAttack = new Set(); // cards dragged/tapped out for the attack combo
+  let markedPickup = new Set(); // table slot indices the user has dragged to themselves to give up on
+  // Rect of a hand card the instant it's played, keyed by card id — the table
+  // never gets a chance to render the move that completes a full defense, so
+  // its animation has to originate from the hand instead of the table.
+  let justPlayedOrigins = {};
+
   const $ = (id) => document.getElementById(id);
   const qsa = (sel) => Array.from(document.querySelectorAll(sel));
+
+  function sameSet(a, b) {
+    if (a.length !== b.length) return false;
+    const sa = [...a].sort();
+    const sb = [...b].sort();
+    return sa.every((c, i) => c === sb[i]);
+  }
 
   // ── i18n application ─────────────────────────────────────────────
   function applyStaticI18n() {
@@ -32,7 +64,7 @@
     localStorage.setItem('burge_lang', lang);
     applyStaticI18n();
     if ($('screen-lobby').classList.contains('active') && lastLobby) renderLobby(lastLobby);
-    if ($('screen-game').classList.contains('active') && lastView) renderGame(lastView);
+    if ($('screen-game').classList.contains('active') && lastView) renderGame(lastView, { animate: false });
     buildRules();
   }
 
@@ -131,7 +163,190 @@
     return view.phase === 'defense' ? view.defender : view.attacker;
   }
 
-  function renderGame(view) {
+  function captureTableCardRects() {
+    const rects = { ...justPlayedOrigins };
+    qsa('#table-cards [data-card]').forEach((el) => {
+      rects[el.getAttribute('data-card')] = el.getBoundingClientRect();
+    });
+    justPlayedOrigins = {};
+    return rects;
+  }
+
+  // `land`: 'pile' (default) shrinks + fades into a discard/hand pile;
+  // 'place' arrives at full size/opacity, landing flat as a table card.
+  function spawnFlyingCard(cardId, fromRect, toRect, delay, land) {
+    land = land || 'pile';
+    const wrap = document.createElement('div');
+    wrap.innerHTML = cardHTML(cardId, {});
+    const el = wrap.firstElementChild;
+    el.classList.add('flying-card');
+    el.style.left = fromRect.left + 'px';
+    el.style.top = fromRect.top + 'px';
+    el.style.width = fromRect.width + 'px';
+    el.style.height = fromRect.height + 'px';
+    document.body.appendChild(el);
+    void el.offsetWidth; // force layout so the transition below actually animates
+    setTimeout(() => {
+      if (land === 'place') {
+        el.style.left = toRect.left + 'px';
+        el.style.top = toRect.top + 'px';
+        el.style.width = toRect.width + 'px';
+        el.style.height = toRect.height + 'px';
+        el.style.transform = 'none';
+        el.style.opacity = '1';
+      } else {
+        const destX = toRect.left + toRect.width / 2 - fromRect.width / 2;
+        const destY = toRect.top + toRect.height / 2 - fromRect.height / 2;
+        el.style.left = destX + 'px';
+        el.style.top = destY + 'px';
+        el.style.transform = `scale(0.45) rotate(${(Math.random() * 30 - 15).toFixed(1)}deg)`;
+        el.style.opacity = '0.1';
+      }
+    }, delay);
+    setTimeout(() => el.remove(), delay + ANIM_MS + 150);
+  }
+
+  function pointRect(cx, cy, w, h) {
+    return { left: cx - w / 2, top: cy - h / 2, width: w, height: h };
+  }
+
+  // A small card-sized rect centered on a player's hand (me) or fan (an
+  // opponent/bot) — used as the generic origin/destination for cards we
+  // don't have a specific real element for (an opponent's hand is hidden).
+  function actorPileRect(seatIndex, view) {
+    if (seatIndex === view.you) {
+      const el = $('my-hand');
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return pointRect(r.left + r.width / 2, r.top + r.height / 2, 84, 124);
+    }
+    const el = document.querySelector(`#opponents .opp[data-seat="${seatIndex}"] .fan`);
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return pointRect(r.left + r.width / 2, r.top + r.height / 2, 58, 84);
+  }
+
+  // Each previous slot is beaten (both cards -> discard) or was left
+  // undefended (its attack card -> the acting player's hand). `extraCard`,
+  // if any, is the last defend that completed a full beat with no pickups —
+  // it never got a chance to render on the table, so it always -> discard.
+  function playResolutionAnimation(prevSlots, extraCard, actingPlayer, oldRects, newView) {
+    const discardEl = $('discard-card') || document.querySelector('.discard-pile');
+    const discardRect = discardEl ? discardEl.getBoundingClientRect() : null;
+    const hasPickup = prevSlots.some((s) => s.defense == null);
+    let handRect = null;
+    if (hasPickup) {
+      const handEl =
+        actingPlayer === newView.you
+          ? $('my-hand')
+          : document.querySelector(`#opponents .opp[data-seat="${actingPlayer}"]`);
+      handRect = handEl ? handEl.getBoundingClientRect() : null;
+    }
+
+    let i = 0;
+    prevSlots.forEach((slot) => {
+      if (slot.defense != null) {
+        if (!discardRect) return;
+        [slot.attack, slot.defense].forEach((cardId) => {
+          const fromRect = oldRects[cardId];
+          if (fromRect) spawnFlyingCard(cardId, fromRect, discardRect, stagger(i++));
+        });
+      } else if (handRect) {
+        const fromRect = oldRects[slot.attack];
+        if (fromRect) spawnFlyingCard(slot.attack, fromRect, handRect, stagger(i++));
+      }
+    });
+    if (extraCard && discardRect) {
+      const fromRect = oldRects[extraCard];
+      if (fromRect) spawnFlyingCard(extraCard, fromRect, discardRect, stagger(i++));
+    }
+  }
+
+  // A fresh attack just appeared (0 -> N table slots): fly each attack card
+  // from the attacker's staged cards (if it was me) or their fan (a bot/
+  // opponent) onto its new table slot.
+  function playAttackAnimation(slots, attacker, oldStagingRects, view) {
+    const fallbackRect = actorPileRect(attacker, view);
+    let i = 0;
+    slots.forEach((slot) => {
+      const cardId = slot.attack;
+      const toEl = document.querySelector(`#table-cards .slot > [data-card="${CSS.escape(cardId)}"]`);
+      if (!toEl) return;
+      const toRect = toEl.getBoundingClientRect();
+      const fromRect = (oldStagingRects && oldStagingRects[cardId]) || fallbackRect;
+      if (fromRect) spawnFlyingCard(cardId, fromRect, toRect, stagger(i++), 'place');
+    });
+  }
+
+  // A single slot just got its defense card filled in (not the last one —
+  // that case resolves the whole exchange instead, see playResolutionAnimation).
+  function playDefendAnimation(slotIndex, cardId, defender, view) {
+    const toEl = document.querySelector(
+      `#table-cards .slot[data-slot="${slotIndex}"] .defense [data-card="${CSS.escape(cardId)}"]`
+    );
+    if (!toEl) return;
+    const toRect = toEl.getBoundingClientRect();
+    const fromRect = justPlayedOrigins[cardId] || actorPileRect(defender, view);
+    delete justPlayedOrigins[cardId];
+    if (fromRect) spawnFlyingCard(cardId, fromRect, toRect, 0, 'place');
+  }
+
+  function renderGame(view, opts) {
+    opts = opts || {};
+    const animate = opts.animate !== false;
+    const prevView = lastView;
+
+    const prevSlots = prevView ? prevView.table.slots : [];
+
+    let pendingAnim = null;
+    if (animate && prevView) {
+      if (prevSlots.length > 0 && view.table.slots.length === 0) {
+        // A full exchange just resolved (beaten -> discard, undefended -> hand)
+        // — for whichever player acted, human or bot.
+        const last = view.log[view.log.length - 1];
+        if (last && last.key === 'defend') {
+          pendingAnim = {
+            kind: 'resolve',
+            prevSlots,
+            extraCard: last.params.card,
+            player: null,
+            oldRects: captureTableCardRects(),
+          };
+        } else if (last && last.key === 'take') {
+          pendingAnim = {
+            kind: 'resolve',
+            prevSlots,
+            extraCard: null,
+            player: last.params.player,
+            oldRects: captureTableCardRects(),
+          };
+        }
+      } else if (prevSlots.length === 0 && view.table.slots.length > 0) {
+        // A fresh attack was just laid out.
+        let oldStagingRects = null;
+        if (view.attacker === view.you) {
+          oldStagingRects = {};
+          qsa('#attack-staging [data-card]').forEach((el) => {
+            oldStagingRects[el.getAttribute('data-card')] = el.getBoundingClientRect();
+          });
+        }
+        pendingAnim = { kind: 'attack', slots: view.table.slots, attacker: view.attacker, oldStagingRects };
+      } else if (
+        prevSlots.length === view.table.slots.length &&
+        view.table.slots.length > 0 &&
+        view.table.slots.some((s, i) => prevSlots[i] && prevSlots[i].defense == null && s.defense != null)
+      ) {
+        // One slot (not the last) just got its defense card filled in.
+        const idx = view.table.slots.findIndex(
+          (s, i) => prevSlots[i] && prevSlots[i].defense == null && s.defense != null
+        );
+        pendingAnim = { kind: 'defend', slotIndex: idx, card: view.table.slots[idx].defense, defender: view.defender };
+      }
+    }
+
+    if (!(view.yourTurn && view.phase === 'attack')) selectedAttack.clear();
+    if (!(view.yourTurn && view.phase === 'defense')) markedPickup.clear();
+
     lastView = view;
     showScreen('screen-game');
 
@@ -140,13 +355,15 @@
     oppWrap.innerHTML = '';
     const n = view.players.length;
     for (let k = 1; k < n; k++) {
-      const p = view.players[(view.you + k) % n];
+      const seat = (view.you + k) % n;
+      const p = view.players[seat];
       const div = document.createElement('div');
       div.className =
         'opp' +
         (p.isAttacker ? ' attacker' : '') +
         (p.isDefender ? ' defender' : '') +
         (p.finished ? ' finished' : '');
+      div.setAttribute('data-seat', seat);
       const fan = Array.from({ length: Math.min(p.count, 6) })
         .map(() => cardBackHTML({ small: true }))
         .join('');
@@ -160,23 +377,47 @@
       oppWrap.appendChild(div);
     }
 
-    // Trump + talon.
+    // Trump + talon (combined pile) + discard.
     $('trump-card').innerHTML = cardHTML(view.trumpCard, { small: true });
-    $('trump-card').style.opacity = view.trumpInTalon ? '1' : '0.45';
+    $('trump-card').classList.toggle('picked', view.trumpPicked);
+    $('trump-picked-label').classList.toggle('show', view.trumpPicked);
     $('trump-suit-name').textContent = suitName(lang, view.trumpSuit);
     $('talon-card').innerHTML = view.talonCount > 0 ? cardBackHTML({ small: true }) : '';
     $('talon-count').textContent = view.talonCount;
+    $('discard-card').innerHTML = view.discardCount > 0 ? cardBackHTML({ small: true }) : '';
+    $('discard-count').textContent = view.discardCount;
 
-    // Table (attack / defense).
-    const tc = $('table-cards');
-    if (view.table.attack) {
-      const def = view.table.defense
-        ? `<div class="defense">${cardHTML(view.table.defense)}</div>`
-        : '';
-      tc.innerHTML = `<div class="stack">${cardHTML(view.table.attack)}${def}</div>`;
-    } else {
-      tc.innerHTML = '';
+    const inAttackPhase = view.yourTurn && view.phase === 'attack';
+    const inDefensePhase = view.yourTurn && view.phase === 'defense';
+
+    // Attack staging area — cards dragged/tapped out of the hand, awaiting Send.
+    const staging = $('attack-staging');
+    staging.innerHTML = '';
+    if (inAttackPhase) {
+      [...selectedAttack].forEach((card) => {
+        staging.insertAdjacentHTML('beforeend', cardHTML(card, {}));
+      });
     }
+
+    // Table (one or more attack/defense slots).
+    const tc = $('table-cards');
+    tc.innerHTML = '';
+    view.table.slots.forEach((slot, i) => {
+      const undefended = slot.defense == null;
+      const marked = markedPickup.has(i);
+      const targetable = inDefensePhase && undefended && !marked;
+      const div = document.createElement('div');
+      div.className =
+        'slot' +
+        (targetable ? ' targetable' : '') +
+        (marked ? ' marked-pickup' : '');
+      div.setAttribute('data-slot', i);
+      let html = cardHTML(slot.attack, {});
+      if (slot.defense) html += `<div class="defense">${cardHTML(slot.defense)}</div>`;
+      if (marked) html += `<div class="pickup-tag">${t(lang, 'pickupTag')}</div>`;
+      div.innerHTML = html;
+      tc.appendChild(div);
+    });
 
     // Turn banner.
     const banner = $('turn-banner');
@@ -193,36 +434,81 @@
     // My hand.
     const hand = $('my-hand');
     hand.innerHTML = '';
-    const legalDefend = new Set(
-      view.legal.filter((m) => m.type === 'defend').map((m) => m.card)
-    );
-    const legalAttack = new Set(
-      view.legal.filter((m) => m.type === 'attack').map((m) => m.card)
-    );
     view.hand.forEach((card) => {
-      let selectable = false;
+      if (inAttackPhase && selectedAttack.has(card)) return; // staged out of the hand
+      let draggableCard = false;
       let disabled = false;
-      if (view.yourTurn && view.phase === 'attack') {
-        selectable = legalAttack.has(card);
-      } else if (view.yourTurn && view.phase === 'defense') {
-        selectable = legalDefend.has(card);
-        disabled = !selectable;
+      if (inAttackPhase) {
+        draggableCard = true;
+      } else if (inDefensePhase) {
+        const canBeatSomething = view.legal.some((m) => m.type === 'defend' && m.card === card);
+        draggableCard = canBeatSomething;
+        disabled = !canBeatSomething;
       } else {
         disabled = true;
       }
-      hand.insertAdjacentHTML('beforeend', cardHTML(card, { selectable, disabled }));
+      hand.insertAdjacentHTML(
+        'beforeend',
+        cardHTML(card, { selectable: draggableCard, disabled })
+      );
     });
+    qsa('#my-hand .card').forEach((el) => {
+      if (inAttackPhase || (inDefensePhase && !el.classList.contains('disabled'))) {
+        el.setAttribute('draggable', 'true');
+      }
+    });
+    qsa('#table-cards .slot.targetable > .card').forEach((el) => el.setAttribute('draggable', 'true'));
+    qsa('#attack-staging .card').forEach((el) => el.setAttribute('draggable', 'true'));
 
     // Action buttons.
-    const canTake = view.legal.some((m) => m.type === 'take');
     const canSwap = view.legal.some((m) => m.type === 'swap7');
-    $('btn-take').style.display = canTake ? '' : 'none';
     $('btn-swap7').style.display = canSwap ? '' : 'none';
+    $('btn-attack').style.display = inAttackPhase ? '' : 'none';
+    if (inAttackPhase) {
+      const selection = [...selectedAttack];
+      const legalNow = view.legal.some((m) => m.type === 'attack' && sameSet(m.cards, selection));
+      $('btn-attack').disabled = !legalNow;
+      $('btn-attack').textContent =
+        t(lang, 'attackBtn') + (selection.length > 0 ? ` (${selection.length})` : '');
+    }
 
     renderLog(view);
 
     if (view.phase === 'over') showOver(view);
     else $('overlay').classList.remove('show');
+
+    if (pendingAnim) {
+      // Called directly (not deferred via requestAnimationFrame): the DOM
+      // above has already been synchronously rebuilt, and getBoundingClientRect
+      // forces a synchronous layout anyway, so the geometry read inside these
+      // is already correct. rAF is throttled indefinitely on a backgrounded/
+      // unfocused tab, which silently killed every animation.
+      if (pendingAnim.kind === 'resolve') {
+        playResolutionAnimation(
+          pendingAnim.prevSlots,
+          pendingAnim.extraCard,
+          pendingAnim.player,
+          pendingAnim.oldRects,
+          view
+        );
+      } else if (pendingAnim.kind === 'attack') {
+        playAttackAnimation(pendingAnim.slots, pendingAnim.attacker, pendingAnim.oldStagingRects, view);
+      } else if (pendingAnim.kind === 'defend') {
+        playDefendAnimation(pendingAnim.slotIndex, pendingAnim.card, pendingAnim.defender, view);
+      }
+    }
+
+    // Auto-resolve: once every table slot has either been beaten (server-
+    // confirmed) or marked for pickup (locally, via drag/tap), submit `take`
+    // — it discards the beaten ones and hands over only what's left. No
+    // pickup/submit button needed.
+    if (inDefensePhase && view.table.slots.length > 0) {
+      const allAccounted = view.table.slots.every((slot, i) => slot.defense != null || markedPickup.has(i));
+      if (allAccounted) {
+        markedPickup.clear();
+        socket.emit('move', { move: { type: 'take' } });
+      }
+    }
   }
 
   function renderLog(view) {
@@ -231,9 +517,14 @@
     const nameOf = (i) => (view.players[i] ? view.players[i].name : '?');
     view.log.forEach((e) => {
       const p = e.params || {};
+      const cardStr = p.cards
+        ? p.cards.map((c) => cardName(lang, c)).join(', ')
+        : p.card
+        ? cardName(lang, p.card)
+        : '';
       const params = {
         p: p.player != null ? nameOf(p.player) : '',
-        card: p.card ? cardName(lang, p.card) : '',
+        card: cardStr,
         trump: p.trump ? suitName(lang, p.trump) : '',
         rank: p.rank != null ? p.rank : '',
       };
@@ -272,20 +563,172 @@
     $('overlay').classList.add('show');
   }
 
-  // ── Game actions ─────────────────────────────────────────────────
-  $('my-hand').addEventListener('click', (e) => {
+  // ── Drag and drop ────────────────────────────────────────────────
+  // Native HTML5 drag-and-drop. `draggedData` is tracked directly (rather
+  // than relying on dataTransfer.getData, which isn't readable during
+  // dragover in most browsers) since everything happens within one page.
+  let draggedData = null;
+  let draggedEl = null;
+
+  document.addEventListener('dragstart', (e) => {
+    const handCard = e.target.closest('#my-hand .card[draggable="true"]');
+    const stagedCard = e.target.closest('#attack-staging .card');
+    const tableCard = e.target.closest('#table-cards .slot.targetable > .card');
+    if (handCard) {
+      draggedData = { from: 'hand', card: handCard.getAttribute('data-card') };
+      draggedEl = handCard;
+    } else if (stagedCard) {
+      draggedData = { from: 'staging', card: stagedCard.getAttribute('data-card') };
+      draggedEl = stagedCard;
+    } else if (tableCard) {
+      const slotEl = tableCard.closest('.slot');
+      draggedData = {
+        from: 'table',
+        slot: Number(slotEl.getAttribute('data-slot')),
+        card: tableCard.getAttribute('data-card'),
+      };
+      draggedEl = tableCard;
+    } else {
+      draggedData = null;
+      draggedEl = null;
+      return;
+    }
+    e.dataTransfer.effectAllowed = 'move';
+    try {
+      e.dataTransfer.setData('text/plain', draggedData.card);
+    } catch (_) {
+      /* ignored — draggedData is the real source of truth */
+    }
+  });
+  document.addEventListener('dragend', () => {
+    draggedData = null;
+    draggedEl = null;
+    qsa('.drag-over, .drag-over-stage, .drag-over-return').forEach((el) =>
+      el.classList.remove('drag-over', 'drag-over-stage', 'drag-over-return')
+    );
+  });
+
+  function submitDefend(slot, card) {
+    const candidates = lastView.legal.filter((m) => m.type === 'defend' && m.card === card && m.slot === slot);
+    if (candidates.length === 0) return toast(t(lang, 'err_does_not_beat'));
+    markedPickup.delete(slot);
+    if (draggedEl) justPlayedOrigins[card] = draggedEl.getBoundingClientRect();
+    socket.emit('move', { move: candidates[0] });
+  }
+
+  // Drop hand card onto an attack slot -> beat it.
+  const tableCardsEl = $('table-cards');
+  tableCardsEl.addEventListener('dragover', (e) => {
+    const slotEl = e.target.closest('.slot');
+    if (!slotEl || !draggedData || draggedData.from !== 'hand' || !lastView) return;
+    const i = Number(slotEl.getAttribute('data-slot'));
+    if (lastView.table.slots[i].defense != null) return;
+    e.preventDefault();
+    slotEl.classList.add('drag-over');
+  });
+  tableCardsEl.addEventListener('dragleave', (e) => {
+    const slotEl = e.target.closest('.slot');
+    if (slotEl) slotEl.classList.remove('drag-over');
+  });
+  tableCardsEl.addEventListener('drop', (e) => {
+    const slotEl = e.target.closest('.slot');
+    if (!slotEl || !draggedData || draggedData.from !== 'hand') return;
+    e.preventDefault();
+    submitDefend(Number(slotEl.getAttribute('data-slot')), draggedData.card);
+  });
+
+  // Drop hand card onto the table area (attack phase) -> stage it.
+  const tablePlayEl = $('table-play');
+  tablePlayEl.addEventListener('dragover', (e) => {
+    if (!draggedData || draggedData.from !== 'hand' || !lastView || lastView.phase !== 'attack') return;
+    e.preventDefault();
+    tablePlayEl.classList.add('drag-over-stage');
+  });
+  tablePlayEl.addEventListener('dragleave', () => tablePlayEl.classList.remove('drag-over-stage'));
+  tablePlayEl.addEventListener('drop', (e) => {
+    if (!draggedData || draggedData.from !== 'hand' || !lastView || lastView.phase !== 'attack') return;
+    e.preventDefault();
+    tablePlayEl.classList.remove('drag-over-stage');
+    selectedAttack.add(draggedData.card);
+    renderGame(lastView, { animate: false });
+  });
+
+  // Hand area: drop a staged card back -> unstage; drop a table attack card -> mark for pickup.
+  // The drop target is the whole `.me` section (hand + action buttons), not
+  // just the tight `#my-hand` box — a bigger, more forgiving target that
+  // doesn't require dropping in the exact small area the cards occupy.
+  const handEl = $('my-hand');
+  const meEl = document.querySelector('.me');
+  meEl.addEventListener('dragover', (e) => {
+    if (!draggedData) return;
+    if (draggedData.from === 'staging' || draggedData.from === 'table') {
+      e.preventDefault();
+      meEl.classList.add('drag-over-return');
+    }
+  });
+  meEl.addEventListener('dragleave', (e) => {
+    if (!meEl.contains(e.relatedTarget)) meEl.classList.remove('drag-over-return');
+  });
+  meEl.addEventListener('drop', (e) => {
+    if (!draggedData) return;
+    meEl.classList.remove('drag-over-return');
+    if (draggedData.from === 'staging') {
+      e.preventDefault();
+      selectedAttack.delete(draggedData.card);
+      renderGame(lastView, { animate: false });
+    } else if (draggedData.from === 'table') {
+      e.preventDefault();
+      const i = draggedData.slot;
+      if (lastView && lastView.table.slots[i] && lastView.table.slots[i].defense == null) {
+        markedPickup.add(i);
+        renderGame(lastView, { animate: false });
+      }
+    }
+  });
+
+  // ── Click fallbacks (also used on touch devices without drag support) ──
+  handEl.addEventListener('click', (e) => {
     const el = e.target.closest('.card');
     if (!el || !lastView || !lastView.yourTurn) return;
     const card = el.getAttribute('data-card');
     if (lastView.phase === 'attack') {
-      socket.emit('move', { move: { type: 'attack', card } });
+      selectedAttack.add(card);
+      renderGame(lastView, { animate: false });
     } else if (lastView.phase === 'defense') {
-      const ok = lastView.legal.some((m) => m.type === 'defend' && m.card === card);
-      if (!ok) return toast(t(lang, 'err_does_not_beat'));
-      socket.emit('move', { move: { type: 'defend', card } });
+      const candidates = lastView.legal.filter((m) => m.type === 'defend' && m.card === card);
+      if (candidates.length === 0) return toast(t(lang, 'err_does_not_beat'));
+      draggedEl = el;
+      submitDefend(candidates[0].slot, card);
+      draggedEl = null;
     }
   });
-  $('btn-take').onclick = () => socket.emit('move', { move: { type: 'take' } });
+
+  $('attack-staging').addEventListener('click', (e) => {
+    const el = e.target.closest('.card');
+    if (!el) return;
+    selectedAttack.delete(el.getAttribute('data-card'));
+    renderGame(lastView, { animate: false });
+  });
+
+  tableCardsEl.addEventListener('click', (e) => {
+    const slotEl = e.target.closest('.slot');
+    if (!slotEl || !lastView || !lastView.yourTurn || lastView.phase !== 'defense') return;
+    const i = Number(slotEl.getAttribute('data-slot'));
+    if (lastView.table.slots[i].defense != null) return;
+    if (markedPickup.has(i)) markedPickup.delete(i);
+    else markedPickup.add(i);
+    renderGame(lastView, { animate: false });
+  });
+
+  // ── Game actions ─────────────────────────────────────────────────
+  $('btn-attack').onclick = () => {
+    if (!lastView) return;
+    const selection = [...selectedAttack];
+    const legalMatch = lastView.legal.find((m) => m.type === 'attack' && sameSet(m.cards, selection));
+    if (!legalMatch) return toast(t(lang, 'err_bad_set'));
+    socket.emit('move', { move: { type: 'attack', cards: legalMatch.cards } });
+    selectedAttack.clear();
+  };
   $('btn-swap7').onclick = () => socket.emit('move', { move: { type: 'swap7' } });
   $('btn-leave-game').onclick = () => {
     socket.emit('leaveRoom');
@@ -316,12 +759,21 @@
       <h4>Menet</h4>
       <ul>
         <li>Mindenki 5 lapot kap. A felfordított lap színe az <b>adu</b>; ez a húzópakli aljára kerül.</li>
-        <li>A támadó kirak egy lapot. A védő <b>üsse</b> (magasabb azonos színnel, vagy bármelyik aduval), vagy <b>vegye fel</b>.</li>
-        <li>Ütés után a lapok a dobóba kerülnek, a védő lesz a következő támadó.</li>
-        <li>Felvétel után a védő kimarad, a következő játékos támad.</li>
+        <li>Támadáshoz húzd ki a lapo(ka)t az asztalra: egyet, egy <b>párost</b> (két azonos értékű lap,
+        bármilyen színben — pl. piros ász + zöld ász) + 1 tetszőleges kísérő lapot, vagy két párost + 1
+        kísérőt — legfeljebb annyit, amennyi lap éppen a védőnél van — majd kattints: Küldés.</li>
+        <li>Védéskor húzz egy lapot egy kirakott lapra, ha üti; vagy húzd magadhoz a lapot, ha felveszed.
+        Az ütés sosem kötelező, mindig felveheted, amit nem akarsz vagy nem tudsz leütni.</li>
+        <li>Amint minden kirakott lap el van intézve (leütve vagy felvéve), a kör automatikusan lezárul:
+        a leütött lapok a dobóba kerülnek, a felvett lapok a kezedbe. Ha mindent
+        leütöttél, te leszel a következő támadó; ha felvettél valamit, kimaradsz, a következő játékos támad.</li>
         <li>Minden kör után 5-re töltötök a pakliból, amíg van lap.</li>
-        <li>Az adu VII a saját köröd elején elcserélhető a felfordított adura.</li>
-      </ul>`;
+        <li>Az adu VII a saját köröd elején elcserélhető a felfordított adura — kivéve, ha már csak az az
+        egy lap maradt a pakliban.</li>
+      </ul>
+      <p class="credit">Lapképek: szám- és figurás lapok — SZERVÁC Attila fotója (<a href="https://commons.wikimedia.org/wiki/File:Original-Hungarian-Tell-set.jpg" target="_blank" rel="noopener">Wikimedia Commons</a>,
+      <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener">CC BY-SA 4.0</a>, vágva, gyártói jelzés eltávolítva); ászok —
+      Sürch és Neumayer 1860-as metszete (<a href="https://commons.wikimedia.org/wiki/File:Piatnik_%C3%A1szok.jpg" target="_blank" rel="noopener">Wikimedia Commons</a>, közkincs).</p>`;
     const en = `
       <h4>Goal</h4>
       <ul><li>Get rid of your cards! Whoever is left holding cards is the <b>bürge</b>.</li></ul>
@@ -331,12 +783,21 @@
       <h4>Play</h4>
       <ul>
         <li>Everyone gets 5 cards. The flipped card's suit is <b>trump</b>; it goes to the bottom of the draw pile.</li>
-        <li>The attacker plays a card. The defender must <b>beat</b> it (higher of the same suit, or any trump) or <b>pick it up</b>.</li>
-        <li>If beaten, the cards are discarded and the defender leads next.</li>
-        <li>If picked up, the defender is skipped and the next player leads.</li>
+        <li>To attack, drag card(s) onto the table: one, a <b>pair</b> (two cards of the same rank, any suits
+        — e.g. red ace + green ace) + 1 free extra card, or two pairs + 1 extra — capped at the defender's
+        current hand size — then click Send.</li>
+        <li>To defend, drag a hand card onto a table card to beat it, or drag a table card onto yourself to
+        pick it up. Beating is never mandatory — you can always give up on any card you don't want or can't beat.</li>
+        <li>Once every card on the table has been dealt with (beaten or picked up), the round resolves
+        automatically: beaten cards go to discard, picked-up cards go to your hand. If you beat everything,
+        you lead next; if you picked anything up, you're skipped and the next player leads.</li>
         <li>After each round refill to 5 while the pile lasts.</li>
-        <li>The trump VII may be swapped for the face-up trump at the start of your turn.</li>
-      </ul>`;
+        <li>The trump VII may be swapped for the face-up trump at the start of your turn — except once
+        that's the only card left in the draw pile.</li>
+      </ul>
+      <p class="credit">Card photos: number and court cards — SZERVÁC Attila (<a href="https://commons.wikimedia.org/wiki/File:Original-Hungarian-Tell-set.jpg" target="_blank" rel="noopener">Wikimedia Commons</a>,
+      <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener">CC BY-SA 4.0</a>, cropped, manufacturer mark removed); aces —
+      Sürch &amp; Neumayer's 1860 engraving (<a href="https://commons.wikimedia.org/wiki/File:Piatnik_%C3%A1szok.jpg" target="_blank" rel="noopener">Wikimedia Commons</a>, public domain).</p>`;
     $('rules-body').innerHTML = lang === 'hu' ? hu : en;
   }
 
@@ -355,6 +816,8 @@
 
   // ── Init ─────────────────────────────────────────────────────────
   $('name-input').value = localStorage.getItem('burge_name') || '';
+  applyAnimSpeed(Number(localStorage.getItem('burge_anim_ms')) || 900);
+  $('anim-speed').addEventListener('change', (e) => applyAnimSpeed(Number(e.target.value)));
   applyStaticI18n();
   buildRules();
 })();

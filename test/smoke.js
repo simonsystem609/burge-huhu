@@ -13,9 +13,25 @@ function cardMultiset(state) {
   const all = [];
   for (const p of state.players) all.push(...p.hand);
   all.push(...state.talon, ...state.discard);
-  if (state.table.attack) all.push(state.table.attack);
-  if (state.table.defense) all.push(state.table.defense);
+  for (const slot of state.table.slots) {
+    all.push(slot.attack);
+    if (slot.defense != null) all.push(slot.defense);
+  }
   return all;
+}
+
+function sameCards(a, b) {
+  if (a.length !== b.length) return false;
+  const sa = [...a].sort();
+  const sb = [...b].sort();
+  return sa.every((c, i) => c === sb[i]);
+}
+
+function movesEqual(a, b) {
+  if (a.type !== b.type) return false;
+  if (a.type === 'attack') return sameCards(a.cards, b.cards);
+  if (a.type === 'defend') return a.slot === b.slot && a.card === b.card;
+  return true; // take / swap7
 }
 
 function playOneGame(seatCount) {
@@ -33,7 +49,7 @@ function playOneGame(seatCount) {
 
   let guard = 0;
   while (state.phase !== 'over') {
-    if (++guard > 5000) throw new Error('Game did not terminate (possible loop)');
+    if (++guard > 8000) throw new Error('Game did not terminate (possible loop)');
     const actor = currentActor(state);
     if (!actor) throw new Error('No actor but game not over');
     const move = chooseMove(state, actor.player);
@@ -41,7 +57,7 @@ function playOneGame(seatCount) {
 
     // The chosen move must be in the legal set.
     const legal = legalMoves(state, actor.player);
-    const ok = legal.some((m) => m.type === move.type && m.card === move.card);
+    const ok = legal.some((m) => movesEqual(m, move));
     if (!ok) throw new Error(`Illegal move chosen: ${JSON.stringify(move)}`);
 
     applyMove(state, actor.player, move);

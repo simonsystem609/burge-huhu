@@ -1,0 +1,26 @@
+Card face photos in this folder come from two sources.
+
+1) Number cards (VII/VIII/IX/X) and court cards (Also/Felso/Kiraly), all
+   4 suits — cropped from:
+
+     "Original-Hungarian-Tell-set.jpg"
+     Photo by SZERVÁC Attila, via Wikimedia Commons
+     https://commons.wikimedia.org/wiki/File:Original-Hungarian-Tell-set.jpg
+     License: CC BY-SA 4.0 — https://creativecommons.org/licenses/by-sa/4.0/
+
+   Modifications made: cropped into individual card images; the printed
+   manufacturer mark ("PIATNIK WIEN www.piatnik.com") in the blank center
+   gap of the tok-VII card was painted out with a sampled background fill.
+   These derived images are themselves licensed under CC BY-SA 4.0, per the
+   ShareAlike term of the source license.
+
+2) Aces (Asz), all 4 suits — cropped from:
+
+     "Piatnik ászok.jpg"
+     Original engraving by Josef Sürch and Josef Neumayer, 1860
+     https://commons.wikimedia.org/wiki/File:Piatnik_%C3%A1szok.jpg
+     License: Public domain (author's life + 70 years has long since passed)
+
+Both depict the same Hungarian "Tell pattern" (magyar kártya) deck,
+originally designed by József Schneider (Pest, c. 1836) and produced
+largely unchanged by card manufacturers since.

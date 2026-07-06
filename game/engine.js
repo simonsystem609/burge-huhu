@@ -6,19 +6,31 @@
  * Family: Hungarian trump "beating" game (rokon a durák/orosz családdal).
  * 2–4 players. See RULES below and README.md for the exact interpretation used.
  *
- * ── RULES IMPLEMENTED (v1) ────────────────────────────────────────────────
+ * ── RULES IMPLEMENTED (v2) ────────────────────────────────────────────────
  *  • 32-card Hungarian deck. Deal 5 cards each.
  *  • Flip the next card: its SUIT is trump (adu). That card is placed at the
  *    BOTTOM of the talon (draw pile), so it is the very last card drawn.
  *  • Turn = one attacker vs one defender (the next active player clockwise).
- *  • Attacker plays ONE card. Defender must BEAT it (higher card of the same
- *    suit, or any trump; a higher trump beats a lower trump) or PICK IT UP.
- *      – Beaten: both cards go to the discard pile. Refill hands to 5 (attacker
- *        first, clockwise). The DEFENDER becomes the next attacker.
- *      – Taken: the attack card goes into the defender's hand. Refill. The
- *        attack passes to the player AFTER the defender (defender is skipped).
+ *  • Attacker plays a SET of cards: a single card, a pair (same rank, any
+ *    suits) + one follower card, or two pairs + one follower card (3 or 5
+ *    cards total) — capped at the defender's current hand size.
+ *  • Defender may BEAT any card in the set (higher card of the same suit, or
+ *    any trump; a higher trump beats a lower trump) with one hand card per
+ *    attack card. Beating is never mandatory, even if a full defense is
+ *    possible — the defender can stop at any point and TAKE.
+ *  • On take: slots already beaten this exchange are discarded as normal
+ *    (attack + defense card both); only the still-undefended attack cards
+ *    go into the defender's hand. A full beat and a full take are just the
+ *    two ends of this same spectrum — partial defense is a real, rewarded
+ *    choice, not an all-or-nothing gamble.
+ *      – Fully beaten (defender chose to cover every slot): all cards go to
+ *        discard. Refill hands to 5 (attacker first, clockwise). The
+ *        DEFENDER becomes the next attacker.
+ *      – Any cards taken: refill, then the attack passes to the player
+ *        AFTER the defender (defender is skipped).
  *  • The trump VII may be swapped, on your attack turn, for the face-up trump
- *    card at the bottom of the talon.
+ *    card at the bottom of the talon — except when that trump card is the
+ *    very last card left in the talon.
  *  • Once the talon is empty there is no more drawing. A player who empties
  *    their hand is OUT (finished) and is ranked by finishing order.
  *  • The LAST player still holding cards is the "bürge" (loser).
@@ -74,10 +86,11 @@ function createGame(players, rng = Math.random) {
     talon, // talon[0] is the bottom card (the trump card) once it's the last one
     trumpCard,
     trumpSuit,
+    trumpPicked: false, // true once the trump card has actually been drawn out
     discard: [],
     attacker: 0,
     defender: 1,
-    table: { attack: null, defense: null },
+    table: { slots: [] }, // [{ attack: cardId, defense: cardId|null }, ...]
     phase: 'attack', // 'attack' | 'defense' | 'over'
     finishedOrder: [],
     loser: null,
@@ -113,7 +126,9 @@ function nextActive(state, from) {
 /** Draw one card from the top of the talon (talon end). */
 function drawOne(state, player) {
   if (state.talon.length === 0) return false;
-  player.hand.push(state.talon.pop());
+  const card = state.talon.pop();
+  if (card === state.trumpCard) state.trumpPicked = true;
+  player.hand.push(card);
   return true;
 }
 
@@ -192,6 +207,97 @@ function currentActor(state) {
   return { player: state.defender, role: 'defense' };
 }
 
+// ── Attack-set combinatorics ────────────────────────────────────────────
+
+function combinations(arr, k) {
+  const results = [];
+  const combo = [];
+  (function helper(start) {
+    if (combo.length === k) {
+      results.push(combo.slice());
+      return;
+    }
+    for (let i = start; i < arr.length; i++) {
+      combo.push(arr[i]);
+      helper(i + 1);
+      combo.pop();
+    }
+  })(0);
+  return results;
+}
+
+/**
+ * A legal attack set is: one card; OR one pair (two cards of the same rank,
+ * any suits) plus one follower card (3 total); OR two pairs plus one
+ * follower card (5 total). Extra cards sharing a pair's rank are fine (e.g.
+ * a follower that happens to match — that's just a bigger pair, still legal).
+ */
+function isValidAttackSet(cards) {
+  if (cards.length === 1) return true;
+  if (cards.length !== 3 && cards.length !== 5) return false;
+  const counts = {};
+  for (const c of cards) {
+    const r = cardRank(c);
+    counts[r] = (counts[r] || 0) + 1;
+  }
+  const pairsNeeded = cards.length === 3 ? 1 : 2;
+  let pairs = 0;
+  for (const r in counts) pairs += Math.floor(counts[r] / 2);
+  return pairs >= pairsNeeded;
+}
+
+/** All legal attack sets from `hand`, capped at `maxSize` cards. */
+function enumerateAttackSets(hand, maxSize) {
+  const sets = [];
+  for (const n of [1, 3, 5]) {
+    if (n > hand.length || n > maxSize) continue;
+    for (const combo of combinations(hand, n)) {
+      if (isValidAttackSet(combo)) sets.push(combo);
+    }
+  }
+  return sets;
+}
+
+/**
+ * Can every card in `attackCards` be beaten by a distinct card from `hand`?
+ * Bipartite matching (Kuhn's algorithm) — small inputs, always exact.
+ * Returns an assignment array (attackCards[i] -> hand card that beats it) or
+ * null if no full defense exists.
+ */
+function findFullDefense(attackCards, hand, trumpSuit) {
+  const n = attackCards.length;
+  if (n === 0) return [];
+  const adj = attackCards.map((atk) =>
+    hand.map((c, hi) => (beats(atk, c, trumpSuit) ? hi : -1)).filter((hi) => hi !== -1)
+  );
+  const matchToAttack = new Array(hand.length).fill(-1);
+
+  function tryKuhn(attackIdx, visited) {
+    for (const hi of adj[attackIdx]) {
+      if (visited[hi]) continue;
+      visited[hi] = true;
+      if (matchToAttack[hi] === -1 || tryKuhn(matchToAttack[hi], visited)) {
+        matchToAttack[hi] = attackIdx;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  let matched = 0;
+  for (let i = 0; i < n; i++) {
+    const visited = new Array(hand.length).fill(false);
+    if (tryKuhn(i, visited)) matched++;
+  }
+  if (matched < n) return null;
+
+  const assignment = new Array(n).fill(null);
+  for (let hi = 0; hi < hand.length; hi++) {
+    if (matchToAttack[hi] !== -1) assignment[matchToAttack[hi]] = hand[hi];
+  }
+  return assignment;
+}
+
 /** Legal moves for a given player index (empty array if not their turn). */
 function legalMoves(state, playerIndex) {
   const actor = currentActor(state);
@@ -200,32 +306,38 @@ function legalMoves(state, playerIndex) {
   const moves = [];
 
   if (actor.role === 'attack') {
-    // Optional: swap trump VII with the face-up trump card at bottom of talon.
+    // Optional: swap trump VII with the face-up trump card at bottom of talon
+    // (not allowed once the trump card is the very last card left in the talon).
     const trumpSeven = `${state.trumpSuit}-VII`;
     if (
-      state.talon.length > 0 &&
+      state.talon.length > 1 &&
       state.talon[0] === state.trumpCard &&
       state.trumpCard !== trumpSeven &&
       p.hand.includes(trumpSeven)
     ) {
       moves.push({ type: 'swap7' });
     }
-    for (const card of p.hand) {
-      moves.push({ type: 'attack', card });
+    const defenderHandSize = state.players[state.defender].hand.length;
+    for (const cards of enumerateAttackSets(p.hand, defenderHandSize)) {
+      moves.push({ type: 'attack', cards });
     }
   } else {
-    let canBeat = false;
-    for (const card of p.hand) {
-      if (beats(state.table.attack, card, state.trumpSuit)) {
-        moves.push({ type: 'defend', card });
-        canBeat = true;
+    const undefended = [];
+    state.table.slots.forEach((slot, i) => {
+      if (slot.defense == null) undefended.push(i);
+    });
+    for (const i of undefended) {
+      const atk = state.table.slots[i].attack;
+      for (const card of p.hand) {
+        if (beats(atk, card, state.trumpSuit)) {
+          moves.push({ type: 'defend', slot: i, card });
+        }
       }
     }
-    // Endgame rule: once the talon is empty you MUST beat if you can — no
-    // voluntary pickups — otherwise cheap cards can circulate forever.
-    if (!(state.talon.length === 0 && canBeat)) {
-      moves.push({ type: 'take' });
-    }
+    // Beating is never mandatory — the defender can always stop and pick up
+    // whatever they haven't (or don't want to) beat, even if a full defense
+    // of every remaining slot was still possible.
+    moves.push({ type: 'take' });
   }
   return moves;
 }
@@ -255,7 +367,7 @@ function applyMove(state, playerIndex, move) {
     const trumpSeven = `${state.trumpSuit}-VII`;
     const p = state.players[playerIndex];
     if (
-      state.talon.length === 0 ||
+      state.talon.length <= 1 ||
       state.talon[0] !== state.trumpCard ||
       state.trumpCard === trumpSeven ||
       !handHas(p, trumpSeven)
@@ -274,45 +386,66 @@ function applyMove(state, playerIndex, move) {
   if (actor.role === 'attack') {
     if (move.type !== 'attack') throw new Error('illegal:expected_attack');
     const p = state.players[playerIndex];
-    if (!handHas(p, move.card)) throw new Error('illegal:not_in_hand');
-    removeCard(p, move.card);
-    state.table.attack = move.card;
-    state.table.defense = null;
+    const cards = move.cards;
+    if (!Array.isArray(cards) || cards.length === 0) throw new Error('illegal:empty_attack');
+    if (new Set(cards).size !== cards.length) throw new Error('illegal:duplicate_cards');
+    for (const c of cards) {
+      if (!handHas(p, c)) throw new Error('illegal:not_in_hand');
+    }
+    if (!isValidAttackSet(cards)) throw new Error('illegal:bad_set_shape');
+    if (cards.length > state.players[state.defender].hand.length) {
+      throw new Error('illegal:too_many_cards');
+    }
+    for (const c of cards) removeCard(p, c);
+    state.table.slots = cards.map((c) => ({ attack: c, defense: null }));
     state.phase = 'defense';
-    pushLog(state, 'attack', { player: playerIndex, card: move.card });
+    pushLog(state, 'attack', { player: playerIndex, cards });
     return state;
   }
 
-  // Defense phase.
+  // Defense phase. Beating is never mandatory: whatever the defender hasn't
+  // beaten by the time they submit `take`, they pick up — but slots they
+  // already beat are still discarded, not returned. Partial defense is a
+  // real, rewarded choice, not an all-or-nothing gamble.
   const defender = state.players[playerIndex];
   if (move.type === 'take') {
-    // Enforce the "must beat if able" endgame rule.
-    if (
-      state.talon.length === 0 &&
-      defender.hand.some((c) => beats(state.table.attack, c, state.trumpSuit))
-    ) {
-      throw new Error('illegal:must_beat');
+    const beaten = state.table.slots.filter((s) => s.defense != null);
+    const undefended = state.table.slots.filter((s) => s.defense == null);
+    for (const s of beaten) {
+      state.discard.push(s.attack);
+      state.discard.push(s.defense);
     }
-    defender.hand.push(state.table.attack);
-    pushLog(state, 'take', { player: playerIndex, card: state.table.attack });
-    const skipDefender = state.defender;
-    resolveEndOfExchange(state, /*defenderBeat=*/ false, skipDefender);
+    const pickedUp = undefended.map((s) => s.attack);
+    defender.hand.push(...pickedUp);
+    if (pickedUp.length > 0) {
+      pushLog(state, 'take', { player: playerIndex, cards: pickedUp });
+    }
+    state.table.slots = [];
+    const fullyBeaten = pickedUp.length === 0;
+    const leadIdx = state.defender;
+    resolveEndOfExchange(state, /*defenderBeat=*/ fullyBeaten, leadIdx);
     return state;
   }
 
   if (move.type === 'defend') {
+    const slot = state.table.slots[move.slot];
+    if (!slot) throw new Error('illegal:no_such_slot');
+    if (slot.defense != null) throw new Error('illegal:slot_already_defended');
     if (!handHas(defender, move.card)) throw new Error('illegal:not_in_hand');
-    if (!beats(state.table.attack, move.card, state.trumpSuit)) {
+    if (!beats(slot.attack, move.card, state.trumpSuit)) {
       throw new Error('illegal:does_not_beat');
     }
     removeCard(defender, move.card);
-    state.table.defense = move.card;
+    slot.defense = move.card;
     pushLog(state, 'defend', {
       player: playerIndex,
       card: move.card,
-      over: state.table.attack,
+      over: slot.attack,
     });
-    resolveEndOfExchange(state, /*defenderBeat=*/ true, state.defender);
+    const allDefended = state.table.slots.every((s) => s.defense != null);
+    if (allDefended) {
+      resolveEndOfExchange(state, /*defenderBeat=*/ true, state.defender);
+    }
     return state;
   }
 
@@ -321,18 +454,19 @@ function applyMove(state, playerIndex, move) {
 
 /**
  * Clean up the table, refill, decide who attacks next, and check finishes.
- * @param defenderBeat  true if the defender beat the card, false if they took it
+ * @param defenderBeat  true if the defender beat every card, false if taken
  * @param defenderIdx   the defender's seat index for this exchange
  */
 function resolveEndOfExchange(state, defenderBeat, defenderIdx) {
   // Cards leave the table.
   if (defenderBeat) {
-    if (state.table.attack) state.discard.push(state.table.attack);
-    if (state.table.defense) state.discard.push(state.table.defense);
+    for (const slot of state.table.slots) {
+      state.discard.push(slot.attack);
+      if (slot.defense != null) state.discard.push(slot.defense);
+    }
   }
-  // (If taken, the attack card already went into the defender's hand.)
-  state.table.attack = null;
-  state.table.defense = null;
+  // (If taken, the cards already went into the defender's hand.)
+  state.table.slots = [];
   state.turnCount += 1;
 
   const talonBefore = state.talon.length;
@@ -367,7 +501,7 @@ function resolveEndOfExchange(state, defenderBeat, defenderIdx) {
       ? nextActive(state, defenderIdx)
       : defenderIdx;
   } else {
-    // Defender took the card and is skipped -> next player after them leads.
+    // Defender took the cards and is skipped -> next player after them leads.
     nextAttacker = nextActive(state, defenderIdx);
   }
 
@@ -387,9 +521,10 @@ function viewFor(state, playerIndex) {
     trumpSuit: state.trumpSuit,
     trumpCard: state.trumpCard,
     trumpInTalon: state.talon.length > 0 && state.talon[0] === state.trumpCard,
+    trumpPicked: state.trumpPicked,
     talonCount: state.talon.length,
     discardCount: state.discard.length,
-    table: { attack: state.table.attack, defense: state.table.defense },
+    table: { slots: state.table.slots.map((s) => ({ attack: s.attack, defense: s.defense })) },
     attacker: state.attacker,
     defender: state.defender,
     hand: you ? [...you.hand] : [],
@@ -423,6 +558,9 @@ module.exports = {
   currentActor,
   nextActive,
   viewFor,
+  isValidAttackSet,
+  enumerateAttackSets,
+  findFullDefense,
   // exported for tests
   beats,
   strength,

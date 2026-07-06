@@ -50,7 +50,8 @@ game/deck.js       32-card deck, shuffle, beat logic
 game/engine.js     pure rules: deal, legal moves, apply move, win/lose
 game/bot.js        heuristic AI opponent
 game/rooms.js      lobby / room / seat management
-public/            front-end (vanilla JS, SVG-drawn cards, no build step)
+public/            front-end (vanilla JS, no build step)
+public/cards_img/  cropped card-face photos — see CREDIT.txt (CC BY-SA 4.0)
 ```
 
 ## Deploy to Render — no GitHub needed (Docker image)

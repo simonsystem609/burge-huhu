@@ -31,6 +31,15 @@
             <input id="name-input" type="text" maxlength="16" data-i18n-ph="namePh" placeholder="Írd be a neved" />
           </label>
 
+          <label class="field inline">
+            <span data-i18n="animSpeed">Animáció sebessége</span>
+            <select id="anim-speed">
+              <option value="500" data-i18n="animFast">Gyors</option>
+              <option value="900" selected data-i18n="animNormal">Normál</option>
+              <option value="1500" data-i18n="animSlow">Lassú</option>
+            </select>
+          </label>
+
           <div class="menu-actions">
             <div class="single-block">
               <label class="field inline">
@@ -81,26 +90,34 @@
           <div id="opponents" class="opponents"></div>
 
           <div class="center-row">
-            <div class="pile trump-pile">
-              <div id="trump-card"></div>
-              <span class="pile-label"><span data-i18n="trump">Adu</span> · <b id="trump-suit-name"></b></span>
+            <div class="pile talon-group">
+              <div class="talon-stack">
+                <div id="trump-card" class="trump-peek"></div>
+                <div id="talon-card" class="draw-stack"></div>
+              </div>
+              <span class="pile-label">
+                <span data-i18n="trump">Adu</span> · <b id="trump-suit-name"></b> ·
+                <b id="talon-count">0</b>
+              </span>
+              <span id="trump-picked-label" class="picked-label" data-i18n="trumpPicked">Elvitték</span>
             </div>
 
-            <div class="table-play">
+            <div class="table-play" id="table-play">
+              <div id="attack-staging" class="attack-staging"></div>
               <div id="table-cards" class="table-cards"></div>
               <div id="turn-banner" class="turn-banner"></div>
             </div>
 
-            <div class="pile draw-pile">
-              <div id="talon-card"></div>
-              <span class="pile-label"><span data-i18n="talon">Húzópakli</span> · <b id="talon-count">0</b></span>
+            <div class="pile discard-pile">
+              <div id="discard-card"></div>
+              <span class="pile-label"><span data-i18n="discard">Dobott</span> · <b id="discard-count">0</b></span>
             </div>
           </div>
 
           <div class="me">
             <div id="my-hand" class="hand"></div>
             <div class="my-actions">
-              <button id="btn-take" class="warn" data-i18n="take">Felveszem</button>
+              <button id="btn-attack" class="primary" data-i18n="attackBtn">Küldés</button>
               <button id="btn-swap7" class="ghost" data-i18n="swap7">Adu VII csere</button>
               <button id="btn-leave-game" class="ghost small" data-i18n="leave">Kilépés</button>
             </div>

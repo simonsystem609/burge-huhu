@@ -13,10 +13,7 @@
   --warn: #e06a4a;
   --card-bg: #f6f1de;
   --card-ink: #1a1a1a;
-  --suit-piros: #d1344a;
-  --suit-zold: #2f8f4e;
-  --suit-makk: #7a5230;
-  --suit-tok: #e0a11b;
+  --anim-dur: 900ms;
   --radius: 14px;
   --shadow: 0 8px 26px rgba(0, 0, 0, 0.35);
 }
@@ -140,7 +137,12 @@ input:focus, select:focus { outline: 2px solid var(--accent); }
 .opp {
   display: flex; flex-direction: column; align-items: center; gap: 6px;
   padding: 8px 12px; border-radius: 12px; background: rgba(0,0,0,0.22);
-  border: 2px solid transparent; min-width: 96px;
+  border: 2px solid transparent;
+  /* Fixed (not content-sized) so an opponent's card count changing every
+   * turn never resizes this box — which used to reflow the whole opponents
+   * row and shift every other player's panel sideways on every move. */
+  width: 230px;
+  flex-shrink: 0;
 }
 .opp.attacker { border-color: var(--gold); }
 .opp.defender { border-color: var(--warn); }
@@ -152,21 +154,71 @@ input:focus, select:focus { outline: 2px solid var(--accent); }
 .opp .fan .card.small:first-child { margin-left: 0; }
 
 .center-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.pile { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 84px; }
+/* Fixed width AND flex-shrink:0 (not min-width): the count label
+ * ("Dobott · 8" -> "· 12") is the right/left-anchored edge of this
+ * space-between row, so letting it grow with digit count — or shrink
+ * whenever the table-play section in the middle needed more room for a
+ * multi-card attack — shifted the whole pile sideways every time. */
+.pile { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 108px; flex-shrink: 0; }
 .pile-label { color: var(--muted); font-size: 0.78em; text-align: center; }
 .pile-label b { color: var(--ink); }
-.trump-pile .card { transform: rotate(-6deg); }
+
+/* Combined trump + draw pile: trump card peeks out from under the draw stack */
+.talon-group { width: 112px; }
+.talon-stack { position: relative; width: 74px; height: 96px; }
+.trump-peek {
+  position: absolute; left: -22px; top: 8px; transform: rotate(-20deg);
+  transition: filter 0.3s;
+}
+.trump-peek.picked { filter: grayscale(0.7) brightness(0.6); }
+.draw-stack { position: absolute; left: 14px; top: 0; z-index: 1; }
+.picked-label {
+  display: none; color: var(--warn); font-weight: 800; font-size: 0.72em;
+  letter-spacing: 0.5px; text-transform: uppercase;
+}
+.picked-label.show { display: block; }
+
+.discard-pile .card { transform: rotate(5deg); filter: brightness(0.82) saturate(0.85); }
 
 .table-play { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 8px; min-height: 150px; justify-content: center; }
-.table-cards { display: flex; gap: 8px; align-items: center; min-height: 130px; }
-.table-cards .stack { position: relative; }
-.table-cards .stack .defense { position: absolute; left: 16px; top: 18px; }
+.table-play.drag-over-stage { background: rgba(229,181,58,0.08); border-radius: 14px; }
+.attack-staging {
+  display: flex; gap: 6px; align-items: center; justify-content: center; min-height: 0;
+  transition: min-height 0.15s;
+}
+.attack-staging:empty { min-height: 0; }
+.attack-staging .card { animation: slotIn 0.2s ease; }
+.table-cards { display: flex; gap: 16px; align-items: center; justify-content: center; min-height: 130px; flex-wrap: wrap; }
+.table-cards .slot { position: relative; animation: slotIn 0.25s ease; }
+.table-cards .slot.targetable { cursor: grab; }
+.table-cards .slot.targetable .card { box-shadow: 0 0 0 2px rgba(229,181,58,0.55), 0 3px 8px rgba(0,0,0,0.35); }
+.table-cards .slot.drag-over .card { box-shadow: 0 0 0 3px var(--accent), 0 3px 8px rgba(0,0,0,0.35); }
+.table-cards .slot.marked-pickup { opacity: 0.5; }
+.table-cards .slot.marked-pickup .card { box-shadow: 0 0 0 3px var(--warn), 0 3px 8px rgba(0,0,0,0.35); }
+.table-cards .slot .defense { position: absolute; left: 18px; top: 22px; }
+.table-cards .slot .pickup-tag {
+  position: absolute; bottom: -18px; left: 50%; transform: translateX(-50%);
+  font-size: 0.68em; font-weight: 800; color: var(--warn); white-space: nowrap;
+}
+@keyframes slotIn { from { opacity: 0; transform: translateY(10px) scale(0.9); } to { opacity: 1; transform: none; } }
 .turn-banner { font-weight: 800; color: var(--gold); min-height: 1.4em; text-align: center; }
 .turn-banner.you { color: var(--accent); animation: pulse 1.3s infinite; }
 @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.55;} }
 
-.me { display: flex; flex-direction: column; align-items: center; gap: 10px; }
-.hand { display: flex; justify-content: center; gap: 6px; flex-wrap: wrap; min-height: 132px; }
+.me { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 10px; border-radius: 16px; transition: background 0.15s; }
+/* Drop-to-pick-up highlight covers the whole .me section (hand + buttons),
+ * matching the enlarged drop target — not just the tight hand box. */
+.me.drag-over-return { background: rgba(55,184,122,0.12); }
+.hand {
+  display: flex; justify-content: flex-start; gap: 6px; flex-wrap: wrap;
+  min-height: 132px; border-radius: 14px;
+  /* Fixed width, left-anchored content: playing a card only closes the gap
+   * where it was instead of recentering (and shifting) every other card
+   * in hand — that whole-row recenter was the main source of page "jumping". */
+  width: min(760px, 100%);
+}
+.hand .card.selected { transform: translateY(-16px); box-shadow: 0 0 0 3px var(--accent), 0 12px 22px rgba(0,0,0,0.45); }
+.hand .card[draggable="true"], .table-cards .slot.targetable .card, .attack-staging .card { cursor: grab; }
 .my-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
 
 /* Side log */
@@ -177,6 +229,21 @@ input:focus, select:focus { outline: 2px solid var(--accent); }
 .sidelog h3 { margin: 0 0 8px; color: var(--gold); font-size: 0.95rem; }
 #log-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; overflow: auto; font-size: 0.85em; color: var(--muted); }
 #log-list li { padding: 6px 8px; background: rgba(255,255,255,0.04); border-radius: 8px; }
+
+/* Flying card clone used to animate an attack, a beat, a discard, or a
+ * pickup — for every player, not just the local one. Duration is a CSS
+ * variable so the menu's animation-speed control affects every kind at once. */
+.flying-card {
+  position: fixed;
+  z-index: 300;
+  margin: 0;
+  pointer-events: none;
+  transition: left var(--anim-dur, 900ms) cubic-bezier(0.3, 0.6, 0.4, 1),
+    top var(--anim-dur, 900ms) cubic-bezier(0.3, 0.6, 0.4, 1),
+    width var(--anim-dur, 900ms) cubic-bezier(0.3, 0.6, 0.4, 1),
+    height var(--anim-dur, 900ms) cubic-bezier(0.3, 0.6, 0.4, 1),
+    transform var(--anim-dur, 900ms) ease, opacity var(--anim-dur, 900ms) ease;
+}
 
 /* ── Cards ─────────────────────────────────────────────────── */
 .card {
@@ -199,29 +266,13 @@ input:focus, select:focus { outline: 2px solid var(--accent); }
 }
 .card.small { width: 58px; height: 84px; border-radius: 5px; }
 .card.small::before { inset: 2px; }
-.card .corner { position: absolute; display: flex; flex-direction: column; align-items: center; line-height: 1; z-index: 2; }
-.card .corner b { font-size: 0.82rem; font-weight: 800; font-family: Georgia, 'Times New Roman', serif; }
-.card.small .corner b { font-size: 0.58rem; }
-.card .corner.tl { top: 6px; left: 7px; }
-.card .corner.br { bottom: 6px; right: 7px; transform: rotate(180deg); }
-.card .pip {
-  position: absolute; inset: 8px;
-  display: flex; align-items: center; justify-content: center;
+.card .card-photo {
+  position: absolute; inset: 3px;
+  width: calc(100% - 6px); height: calc(100% - 6px);
+  object-fit: cover;
+  border-radius: 3px;
+  pointer-events: none;
 }
-.card .pip .face-art { width: 100%; height: 100%; display: block; }
-.card .suit-icon.mini { width: 13px; height: 13px; margin-top: 1px; }
-.card.small .suit-icon.mini { width: 9px; height: 9px; }
-
-/* Suit colours */
-.suit-piros { color: var(--suit-piros); }
-.suit-zold  { color: var(--suit-zold); }
-.suit-makk  { color: var(--suit-makk); }
-.suit-tok   { color: var(--suit-tok); }
-.card.suit-piros .corner b { color: var(--suit-piros); }
-.card.suit-zold  .corner b { color: var(--suit-zold); }
-.card.suit-makk  .corner b { color: var(--suit-makk); }
-.card.suit-tok   .corner b { color: var(--suit-tok); }
-.suit-icon { fill: currentColor; }
 
 .card.selectable { cursor: pointer; transition: transform 0.1s ease, box-shadow 0.1s ease; }
 .card.selectable:hover { transform: translateY(-14px); box-shadow: 0 12px 22px rgba(0,0,0,0.45); }
@@ -255,6 +306,8 @@ input:focus, select:focus { outline: 2px solid var(--accent); }
 .rules-body h4 { color: var(--gold); margin: 14px 0 4px; }
 .rules-body ul { margin: 4px 0; padding-left: 20px; }
 .rules-body li { margin: 3px 0; }
+.rules-body .credit { margin: 14px 0 0; font-size: 0.75rem; color: var(--muted); }
+.rules-body .credit a { color: var(--muted); }
 
 /* Toast */
 .toast {
@@ -270,5 +323,4 @@ input:focus, select:focus { outline: 2px solid var(--accent); }
   #screen-game { flex-direction: column; }
   .sidelog { width: auto; max-height: 130px; }
   .card { width: 66px; height: 96px; }
-  .card .pip .suit-icon { width: 40px; height: 40px; }
 }
