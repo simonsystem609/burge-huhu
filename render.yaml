@@ -1,0 +1,16 @@
+# Render.com Blueprint — only used for the *git-based* deploy path (any git host:
+# GitHub, GitLab, Bitbucket, or "Public Git Repository" with a bare URL).
+# If you don't want git hosting at all, use the Dockerfile + Docker Hub path in
+# README.md instead ("Deploy an existing image from a registry").
+# Git path: push this project to a repo, then in Render: New + → Blueprint → pick it.
+services:
+  - type: web
+    name: burge-huhu
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "20"

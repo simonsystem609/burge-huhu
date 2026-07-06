@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="hu">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+    <title>Bürge · Hühü</title>
+    <link rel="stylesheet" href="style.css" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%83%8F%3C/text%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand" data-i18n="title">Bürge · Hühü</div>
+      <div class="topbar-right">
+        <button id="btn-rules" class="ghost" data-i18n="rules">Szabályok</button>
+        <div class="lang-switch">
+          <button data-lang="hu" class="lang active">HU</button>
+          <button data-lang="en" class="lang">EN</button>
+        </div>
+      </div>
+    </header>
+
+    <main id="app">
+      <!-- MENU -->
+      <section id="screen-menu" class="screen active">
+        <div class="menu-card">
+          <h1 data-i18n="title">Bürge · Hühü</h1>
+          <p class="subtitle" data-i18n="subtitle">Magyar kártyajáték – 2–4 játékos</p>
+
+          <label class="field">
+            <span data-i18n="yourName">Neved</span>
+            <input id="name-input" type="text" maxlength="16" data-i18n-ph="namePh" placeholder="Írd be a neved" />
+          </label>
+
+          <div class="menu-actions">
+            <div class="single-block">
+              <label class="field inline">
+                <span data-i18n="bots">Gépek száma</span>
+                <select id="bot-count">
+                  <option value="1">1</option>
+                  <option value="2">2</option>
+                  <option value="3" selected>3</option>
+                </select>
+              </label>
+              <button id="btn-single" class="primary" data-i18n="single">Egyjátékos (gépek ellen)</button>
+            </div>
+
+            <div class="divider"></div>
+
+            <button id="btn-create" class="primary" data-i18n="create">Szoba létrehozása</button>
+
+            <div class="join-row">
+              <input id="code-input" type="text" maxlength="4" data-i18n-ph="codePh" placeholder="SZOBAKÓD" />
+              <button id="btn-join" data-i18n="join">Csatlakozás</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- LOBBY -->
+      <section id="screen-lobby" class="screen">
+        <div class="menu-card">
+          <h2 data-i18n="lobby">Váróterem</h2>
+          <div class="code-box">
+            <span data-i18n="code">Kód</span>
+            <strong id="lobby-code">----</strong>
+            <button id="btn-copy" class="ghost small" data-i18n="copy">Másol</button>
+          </div>
+          <ul id="seat-list" class="seat-list"></ul>
+          <div class="lobby-actions">
+            <button id="btn-addbot" data-i18n="addBot">Gép hozzáadása</button>
+            <button id="btn-start" class="primary" data-i18n="startGame">Játék indítása</button>
+            <button id="btn-leave-lobby" class="ghost" data-i18n="leave">Kilépés</button>
+          </div>
+          <p id="lobby-hint" class="hint"></p>
+        </div>
+      </section>
+
+      <!-- GAME -->
+      <section id="screen-game" class="screen">
+        <div class="table">
+          <div id="opponents" class="opponents"></div>
+
+          <div class="center-row">
+            <div class="pile trump-pile">
+              <div id="trump-card"></div>
+              <span class="pile-label"><span data-i18n="trump">Adu</span> · <b id="trump-suit-name"></b></span>
+            </div>
+
+            <div class="table-play">
+              <div id="table-cards" class="table-cards"></div>
+              <div id="turn-banner" class="turn-banner"></div>
+            </div>
+
+            <div class="pile draw-pile">
+              <div id="talon-card"></div>
+              <span class="pile-label"><span data-i18n="talon">Húzópakli</span> · <b id="talon-count">0</b></span>
+            </div>
+          </div>
+
+          <div class="me">
+            <div id="my-hand" class="hand"></div>
+            <div class="my-actions">
+              <button id="btn-take" class="warn" data-i18n="take">Felveszem</button>
+              <button id="btn-swap7" class="ghost" data-i18n="swap7">Adu VII csere</button>
+              <button id="btn-leave-game" class="ghost small" data-i18n="leave">Kilépés</button>
+            </div>
+          </div>
+        </div>
+
+        <aside class="sidelog">
+          <h3 data-i18n="logTitle">Napló</h3>
+          <ul id="log-list"></ul>
+        </aside>
+      </section>
+    </main>
+
+    <!-- GAME OVER -->
+    <div id="overlay" class="overlay">
+      <div class="overlay-card">
+        <h2 id="over-title"></h2>
+        <p id="over-detail"></p>
+        <ol id="over-order" class="over-order"></ol>
+        <div class="overlay-actions">
+          <button id="btn-rematch" class="primary" data-i18n="rematch">Új parti</button>
+          <button id="btn-menu" class="ghost" data-i18n="menu">Főmenü</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- RULES -->
+    <div id="rules-modal" class="overlay">
+      <div class="overlay-card wide">
+        <h2 data-i18n="rules">Szabályok</h2>
+        <div id="rules-body" class="rules-body"></div>
+        <div class="overlay-actions">
+          <button id="btn-rules-close" class="primary">OK</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="i18n.js"></script>
+    <script src="cards.js"></script>
+    <script src="client.js"></script>
+  </body>
+</html>
