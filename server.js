@@ -210,6 +210,21 @@ io.on('connection', (socket) => {
       }
     }
   });
+
+  socket.on('rejoin', ({ code, oldSid } = {}) => {
+    let room = rm.getRoom(String(code || '').trim().toUpperCase());
+    if (!room) return socket.emit('errorMsg', 'no_room');
+    const seat = rm.rejoinRoom(room, socket.id, oldSid);
+    if (!seat) {
+      const res = rm.joinRoom(room.code, socket.id, '');
+      if (res.error) return socket.emit('errorMsg', res.error);
+      room = res.room;
+    }
+    socket.emit('rejoined', { code: room.code });
+    if (room.started) emitGame(room);
+    else emitLobby(room);
+    if (room.started) driveBots(room.code);
+  });
 });
 
 server.listen(PORT, () => {

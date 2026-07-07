@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "node test/smoke.js"
+    "test": "node test/smoke.js",
+    "lint": "eslint . --ext .js"
   },
   "engines": {
     "node": ">=18"
@@ -15,6 +16,9 @@
   "dependencies": {
     "express": "^4.19.2",
     "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0"
   },
   "keywords": [
     "cardgame",

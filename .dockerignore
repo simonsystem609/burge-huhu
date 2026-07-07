@@ -2,6 +2,10 @@ node_modules
 npm-debug.log*
 .git
 .claude
+.github
 test
 ref images
 .env
+.eslintrc.json
+AGENTS.md
+*.md

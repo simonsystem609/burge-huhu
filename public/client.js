@@ -2,13 +2,14 @@
 (function () {
   'use strict';
 
-  const socket = io();
+  const socket = io({ reconnection: true, reconnectionDelay: 800, reconnectionDelayMax: 4000 });
   const { t, suitName, cardName } = window.I18N;
   const { cardHTML, cardBackHTML } = window.Cards;
 
   let lang = localStorage.getItem('burge_lang') || 'hu';
   let lastLobby = null;
   let lastView = null;
+  let lastSid = null; // last socket id we knew, for rejoin matching
 
   // Flying-card animation duration — one shared value for every kind of card
   // move (attack, defend, discard, pickup), for every player. Adjustable from
@@ -811,8 +812,32 @@
   socket.on('lobby', renderLobby);
   socket.on('game', (data) => renderGame(data.view));
   socket.on('errorMsg', (code) => toast(t(lang, 'err_' + code) || t(lang, 'err_generic')));
-  socket.on('leftRoom', () => showScreen('screen-menu'));
-  socket.on('joined', () => {});
+  socket.on('leftRoom', () => {
+    localStorage.removeItem('burge_room');
+    localStorage.removeItem('burge_sid');
+    showScreen('screen-menu');
+  });
+  socket.on('joined', ({ code }) => {
+    localStorage.setItem('burge_room', code);
+    localStorage.setItem('burge_sid', socket.id);
+  });
+  socket.on('rejoined', ({ code }) => {
+    localStorage.setItem('burge_room', code);
+    localStorage.setItem('burge_sid', socket.id);
+    toast(t(lang, 'reconnected'));
+  });
+
+  // Auto-rejoin on (re)connect if we were in a room.
+  socket.on('connect', () => {
+    const roomCode = localStorage.getItem('burge_room');
+    const oldSid = localStorage.getItem('burge_sid');
+    if (roomCode && oldSid && oldSid !== socket.id) {
+      socket.emit('rejoin', { code: roomCode, oldSid });
+    }
+  });
+  socket.on('disconnect', () => {
+    toast(t(lang, 'disconnected'));
+  });
 
   // ── Init ─────────────────────────────────────────────────────────
   $('name-input').value = localStorage.getItem('burge_name') || '';

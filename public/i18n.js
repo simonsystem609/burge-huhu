@@ -79,6 +79,8 @@
       log_player_out: '{p} kifogyott (#{rank}).',
       log_loser: '{p} lett a bürge.',
       log_stalled: 'Patthelyzet – a legtöbb lappal maradó veszít.',
+      reconnected: 'Újracsatlakozva!',
+      disconnected: 'Kapcsolat megszakadt. Újracsatlakozás…',
       // errors
       err_no_room: 'Nincs ilyen szoba.',
       err_full: 'A szoba tele van.',
@@ -149,6 +151,8 @@
       log_player_out: '{p} is out (#{rank}).',
       log_loser: '{p} is the bürge.',
       log_stalled: 'Stalemate – whoever holds the most cards loses.',
+      reconnected: 'Reconnected!',
+      disconnected: 'Connection lost. Reconnecting…',
       err_no_room: 'No such room.',
       err_full: 'The room is full.',
       err_in_progress: 'The game already started.',

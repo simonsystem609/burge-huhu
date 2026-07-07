@@ -149,7 +149,8 @@ class RoomManager {
       return { room, removed: seat.id };
     }
 
-    // Mid-game: convert to a bot.
+    // Mid-game: convert to a bot, but remember the socket so they can rejoin.
+    seat._prevSocketId = seat.socketId;
     seat.isBot = true;
     seat.connected = false;
     seat.socketId = null;
@@ -160,6 +161,23 @@ class RoomManager {
       return { room, ended: true };
     }
     return { room, botified: seat.id };
+  }
+
+  /**
+   * Try to reconnect a player whose seat was botified after a disconnect.
+   * Returns the restored seat or null.
+   */
+  rejoinRoom(room, newSocketId, oldSocketId) {
+    const seat = room.seats.find(
+      (s) => s._prevSocketId === oldSocketId && s.isBot
+    );
+    if (!seat) return null;
+    seat.socketId = newSocketId;
+    seat.isBot = false;
+    seat.connected = true;
+    seat._prevSocketId = null;
+    seat.name = seat.name.replace(' (bot)', '');
+    return seat;
   }
 }
 

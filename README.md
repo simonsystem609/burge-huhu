@@ -97,3 +97,18 @@ Socket.io needs a long-lived connection.
 ## Env vars
 - `PORT` — server port (default 3000; set by the host).
 - `BOT_DELAY_MS` — delay between bot moves in ms (default 850).
+
+## Reconnection
+If your connection drops mid-game, the client automatically tries to rejoin. A bot
+takes over your seat temporarily until you reconnect (within the same session).
+Your room code is stored in `localStorage` so a page refresh won't lose your spot.
+
+## Development
+
+```bash
+npm run lint     # ESLint
+npm test         # smoke test (900 simulated games)
+npm run dev      # auto-restart on file changes
+```
+
+CI runs `npm test` and `npm run lint` on every push via GitHub Actions.
