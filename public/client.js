@@ -297,7 +297,7 @@
   // Cards drawn from the talon during refill: fly from the talon pile to each
   // player's hand area, one by one, staggered across all players.
   function playRefillAnimation(drewLast, view) {
-    const talonEl = $('talon-card');
+    const talonEl = $('talon-stack');
     if (!talonEl) return;
     const talonRect = talonEl.getBoundingClientRect();
     if (!talonRect) return;
@@ -404,9 +404,11 @@
     $('trump-card').classList.toggle('picked', view.trumpPicked);
     $('trump-picked-label').classList.toggle('show', view.trumpPicked);
     $('trump-suit-name').textContent = suitName(lang, view.trumpSuit);
-    $('talon-card').innerHTML = view.talonCount > 0 ? cardBackHTML({ small: true }) : '';
+    $('talon-card').innerHTML = cardBackHTML({ small: true });
+    $('talon-card').style.visibility = view.talonCount > 0 ? '' : 'hidden';
     $('talon-count').textContent = view.talonCount;
-    $('discard-card').innerHTML = view.discardCount > 0 ? cardBackHTML({ small: true }) : '';
+    $('discard-card').innerHTML = cardBackHTML({ small: true });
+    $('discard-card').style.visibility = view.discardCount > 0 ? '' : 'hidden';
     $('discard-count').textContent = view.discardCount;
 
     const inAttackPhase = view.yourTurn && view.phase === 'attack';
