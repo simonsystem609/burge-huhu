@@ -372,32 +372,47 @@
     lastView = view;
     showScreen('screen-game');
 
-    // Opponents (everyone but me), in seat order starting after me.
-    const oppWrap = $('opponents');
-    oppWrap.innerHTML = '';
+    // Opponents — update in place, don't rebuild.
+    let oppEls = {};
+    qsa('#opponents .opp[data-seat]').forEach((el) => {
+      oppEls[Number(el.getAttribute('data-seat'))] = el;
+    });
+    const oppFrag = document.createDocumentFragment();
     const n = view.players.length;
     for (let k = 1; k < n; k++) {
       const seat = (view.you + k) % n;
       const p = view.players[seat];
-      const div = document.createElement('div');
-      div.className =
+      const existing = oppEls[seat];
+      const cls =
         'opp' +
         (p.isAttacker ? ' attacker' : '') +
         (p.isDefender ? ' defender' : '') +
         (p.finished ? ' finished' : '');
-      div.setAttribute('data-seat', seat);
       const fan = Array.from({ length: Math.min(p.count, 6) })
         .map(() => cardBackHTML({ small: true }))
-        .join('');
+        .join('') || '—';
       const meta = p.finished
         ? `#${p.finishRank}`
         : `${p.count} 🂠${p.isBot ? ' · BOT' : ''}`;
-      div.innerHTML =
-        `<div class="fan">${fan || '—'}</div>` +
-        `<div class="opp-name">${escapeHtml(p.name)}</div>` +
-        `<div class="opp-meta">${meta}</div>`;
-      oppWrap.appendChild(div);
+      if (existing) {
+        existing.className = cls;
+        existing.querySelector('.fan').innerHTML = fan;
+        existing.querySelector('.opp-name').textContent = p.name;
+        existing.querySelector('.opp-meta').textContent = meta;
+        oppFrag.appendChild(existing);
+        delete oppEls[seat];
+      } else {
+        const div = document.createElement('div');
+        div.className = cls;
+        div.setAttribute('data-seat', seat);
+        div.innerHTML =
+          `<div class="fan">${fan}</div>` +
+          `<div class="opp-name">${escapeHtml(p.name)}</div>` +
+          `<div class="opp-meta">${meta}</div>`;
+        oppFrag.appendChild(div);
+      }
     }
+    $('opponents').replaceChildren(oppFrag);
 
     // Trump + talon (combined pile) + discard.
     $('trump-card').innerHTML = cardHTML(view.trumpCard, { small: true });
@@ -415,17 +430,18 @@
     const inDefensePhase = view.yourTurn && view.phase === 'defense';
 
     // Attack staging area — cards dragged/tapped out of the hand, awaiting Send.
-    const staging = $('attack-staging');
-    staging.innerHTML = '';
+    const stagingFrag = document.createDocumentFragment();
     if (inAttackPhase) {
       [...selectedAttack].forEach((card) => {
-        staging.insertAdjacentHTML('beforeend', cardHTML(card, {}));
+        const wrap = document.createElement('div');
+        wrap.innerHTML = cardHTML(card, {});
+        stagingFrag.appendChild(wrap.firstElementChild);
       });
     }
+    $('attack-staging').replaceChildren(stagingFrag);
 
     // Table (one or more attack/defense slots).
-    const tc = $('table-cards');
-    tc.innerHTML = '';
+    const tcFrag = document.createDocumentFragment();
     view.table.slots.forEach((slot, i) => {
       const undefended = slot.defense == null;
       const marked = markedPickup.has(i);
@@ -440,8 +456,9 @@
       if (slot.defense) html += `<div class="defense">${cardHTML(slot.defense)}</div>`;
       if (marked) html += `<div class="pickup-tag">${t(lang, 'pickupTag')}</div>`;
       div.innerHTML = html;
-      tc.appendChild(div);
+      tcFrag.appendChild(div);
     });
+    $('table-cards').replaceChildren(tcFrag);
 
     // Turn banner.
     const banner = $('turn-banner');
@@ -455,11 +472,11 @@
       banner.textContent = t(lang, 'waitingFor', { name: who ? who.name : '' });
     }
 
-    // My hand.
+    // My hand — atomic replace, no innerHTML wipe.
     const hand = $('my-hand');
-    hand.innerHTML = '';
+    const handFrag = document.createDocumentFragment();
     view.hand.forEach((card) => {
-      if (inAttackPhase && selectedAttack.has(card)) return; // staged out of the hand
+      if (inAttackPhase && selectedAttack.has(card)) return;
       let draggableCard = false;
       let disabled = false;
       if (inAttackPhase) {
@@ -471,16 +488,15 @@
       } else {
         disabled = true;
       }
-      hand.insertAdjacentHTML(
-        'beforeend',
-        cardHTML(card, { selectable: draggableCard, disabled })
-      );
-    });
-    qsa('#my-hand .card').forEach((el) => {
-      if (inAttackPhase || (inDefensePhase && !el.classList.contains('disabled'))) {
-        el.setAttribute('draggable', 'true');
+      const wrap = document.createElement('div');
+      wrap.innerHTML = cardHTML(card, { selectable: draggableCard, disabled });
+      const cardEl = wrap.firstElementChild;
+      if (inAttackPhase || (inDefensePhase && !disabled)) {
+        cardEl.setAttribute('draggable', 'true');
       }
+      handFrag.appendChild(cardEl);
     });
+    hand.replaceChildren(handFrag);
     qsa('#table-cards .slot.targetable > .card').forEach((el) => el.setAttribute('draggable', 'true'));
     qsa('#attack-staging .card').forEach((el) => el.setAttribute('draggable', 'true'));
 
