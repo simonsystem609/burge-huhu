@@ -27,9 +27,10 @@
     ]
       .filter(Boolean)
       .join(' ');
+    const aceClass = rank === 'Asz' ? ' ace-img' : '';
     return (
       '<div class="' + cls + '" data-card="' + cardId + '">' +
-      '<img class="card-photo" src="cards_img/' + suit + '-' + rank + '.png" alt="' + suit + ' ' + rank + '" draggable="false">' +
+      '<img class="card-photo' + aceClass + '" src="cards_img/' + suit + '-' + rank + '.png" alt="' + suit + ' ' + rank + '" draggable="false">' +
       '</div>'
     );
   }

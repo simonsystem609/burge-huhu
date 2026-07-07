@@ -12,6 +12,7 @@
   let lastSid = null; // last socket id we knew, for rejoin matching
   let animQueue = [];
   let animTimer = null;
+  let tableLocked = false;
 
   // Flying-card animation duration — one shared value for every kind of card
   // move (attack, defend, discard, pickup), for every player. Adjustable from
@@ -371,6 +372,17 @@
 
     lastView = view;
     showScreen('screen-game');
+
+    if (!tableLocked) {
+      const tableEl = document.querySelector('#screen-game .table');
+      if (tableEl) {
+        const r = tableEl.getBoundingClientRect();
+        tableEl.style.width = r.width + 'px';
+        tableEl.style.height = r.height + 'px';
+        tableEl.style.flex = 'none';
+        tableLocked = true;
+      }
+    }
 
     // Opponents — update in place, don't rebuild.
     let oppEls = {};
