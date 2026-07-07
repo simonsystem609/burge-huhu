@@ -12,7 +12,7 @@ const { chooseMove } = require('./game/bot');
 const PORT = process.env.PORT || 3000;
 // Long enough that the client's flying-card animation for one bot move always
 // finishes before the next bot move's view update arrives and re-renders.
-const BOT_DELAY = Number(process.env.BOT_DELAY_MS || 1600); // ms between bot moves
+const BOT_DELAY = Number(process.env.BOT_DELAY_MS || 2200); // ms between bot moves
 
 const app = express();
 const server = http.createServer(app);

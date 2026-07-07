@@ -135,6 +135,7 @@ function drawOne(state, player) {
 /** Refill hands to HAND_SIZE, attacker first, clockwise, while talon lasts. */
 function refill(state) {
   const n = state.players.length;
+  state.drewLast = new Array(n).fill(0);
   const order = [];
   for (let step = 0; step < n; step++) {
     order.push((state.attacker + step) % n);
@@ -143,6 +144,7 @@ function refill(state) {
     const p = state.players[idx];
     while (!p.finished && p.hand.length < HAND_SIZE && state.talon.length > 0) {
       drawOne(state, p);
+      state.drewLast[idx]++;
     }
   }
 }
@@ -547,6 +549,7 @@ function viewFor(state, playerIndex) {
     loser: state.loser,
     finishedOrder: [...state.finishedOrder],
     log: state.log.slice(-8),
+    drewLast: state.drewLast || [],
   };
 }
 

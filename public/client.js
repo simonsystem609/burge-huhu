@@ -10,6 +10,8 @@
   let lastLobby = null;
   let lastView = null;
   let lastSid = null; // last socket id we knew, for rejoin matching
+  let animQueue = [];
+  let animTimer = null;
 
   // Flying-card animation duration — one shared value for every kind of card
   // move (attack, defend, discard, pickup), for every player. Adjustable from
@@ -27,7 +29,7 @@
     if (sel) sel.value = String(ANIM_MS);
   }
   function stagger(i) {
-    return i * Math.round(ANIM_MS * 0.14);
+    return i * Math.round(ANIM_MS * 0.45);
   }
   let selectedAttack = new Set(); // cards dragged/tapped out for the attack combo
   let markedPickup = new Set(); // table slot indices the user has dragged to themselves to give up on
@@ -178,7 +180,7 @@
   function spawnFlyingCard(cardId, fromRect, toRect, delay, land) {
     land = land || 'pile';
     const wrap = document.createElement('div');
-    wrap.innerHTML = cardHTML(cardId, {});
+    wrap.innerHTML = cardId ? cardHTML(cardId, {}) : cardBackHTML({});
     const el = wrap.firstElementChild;
     el.classList.add('flying-card');
     el.style.left = fromRect.left + 'px';
@@ -290,6 +292,25 @@
     const fromRect = justPlayedOrigins[cardId] || actorPileRect(defender, view);
     delete justPlayedOrigins[cardId];
     if (fromRect) spawnFlyingCard(cardId, fromRect, toRect, 0, 'place');
+  }
+
+  // Cards drawn from the talon during refill: fly from the talon pile to each
+  // player's hand area, one by one, staggered across all players.
+  function playRefillAnimation(drewLast, view) {
+    const talonEl = $('talon-card');
+    if (!talonEl) return;
+    const talonRect = talonEl.getBoundingClientRect();
+    if (!talonRect) return;
+    let staggerIdx = 0;
+    for (let seat = 0; seat < drewLast.length; seat++) {
+      const n = drewLast[seat];
+      if (n <= 0) continue;
+      const toRect = actorPileRect(seat, view);
+      if (!toRect) continue;
+      for (let j = 0; j < n; j++) {
+        spawnFlyingCard(null, talonRect, toRect, stagger(staggerIdx++));
+      }
+    }
   }
 
   function renderGame(view, opts) {
@@ -478,12 +499,9 @@
     if (view.phase === 'over') showOver(view);
     else $('overlay').classList.remove('show');
 
+    let animTotal = 0;
+
     if (pendingAnim) {
-      // Called directly (not deferred via requestAnimationFrame): the DOM
-      // above has already been synchronously rebuilt, and getBoundingClientRect
-      // forces a synchronous layout anyway, so the geometry read inside these
-      // is already correct. rAF is throttled indefinitely on a backgrounded/
-      // unfocused tab, which silently killed every animation.
       if (pendingAnim.kind === 'resolve') {
         playResolutionAnimation(
           pendingAnim.prevSlots,
@@ -492,11 +510,25 @@
           pendingAnim.oldRects,
           view
         );
+        const resolveCards = pendingAnim.prevSlots.length * 2 + 1;
+        animTotal = stagger(resolveCards) + ANIM_MS + 150;
       } else if (pendingAnim.kind === 'attack') {
         playAttackAnimation(pendingAnim.slots, pendingAnim.attacker, pendingAnim.oldStagingRects, view);
+        animTotal = stagger(pendingAnim.slots.length) + ANIM_MS + 150;
       } else if (pendingAnim.kind === 'defend') {
         playDefendAnimation(pendingAnim.slotIndex, pendingAnim.card, pendingAnim.defender, view);
+        animTotal = ANIM_MS + 150;
       }
+    }
+
+    if (animate && prevView && view.drewLast && view.drewLast.some((n) => n > 0)) {
+      const resolveSlots = prevView ? prevView.table.slots.length : 0;
+      const resolveCards = resolveSlots * 2 + 1;
+      const resolveDone = stagger(resolveCards) + ANIM_MS + 100;
+      const totalDrew = view.drewLast.reduce((a, b) => a + b, 0);
+      const refillDur = stagger(totalDrew) + ANIM_MS + 150;
+      setTimeout(() => playRefillAnimation(view.drewLast, view), resolveDone);
+      animTotal = Math.max(animTotal, resolveDone + refillDur);
     }
 
     // Auto-resolve: once every table slot has either been beaten (server-
@@ -510,6 +542,7 @@
         socket.emit('move', { move: { type: 'take' } });
       }
     }
+    return animTotal;
   }
 
   function renderLog(view) {
@@ -810,7 +843,20 @@
 
   // ── Socket events ────────────────────────────────────────────────
   socket.on('lobby', renderLobby);
-  socket.on('game', (data) => renderGame(data.view));
+  socket.on('game', (data) => {
+    animQueue.push(data.view);
+    if (animQueue.length === 1) dequeueViews();
+  });
+  function dequeueViews() {
+    if (animQueue.length === 0) return;
+    clearTimeout(animTimer);
+    const view = animQueue[0];
+    const dur = renderGame(view);
+    animTimer = setTimeout(() => {
+      animQueue.shift();
+      dequeueViews();
+    }, dur + 80);
+  }
   socket.on('errorMsg', (code) => toast(t(lang, 'err_' + code) || t(lang, 'err_generic')));
   socket.on('leftRoom', () => {
     localStorage.removeItem('burge_room');
