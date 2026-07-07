@@ -10,9 +10,7 @@ const { applyMove, currentActor, viewFor } = require('./game/engine');
 const { chooseMove } = require('./game/bot');
 
 const PORT = process.env.PORT || 3000;
-// Long enough that the client's flying-card animation for one bot move always
-// finishes before the next bot move's view update arrives and re-renders.
-const BOT_DELAY = Number(process.env.BOT_DELAY_MS || 2200); // ms between bot moves
+const DEFAULT_BOT_DELAY = Number(process.env.BOT_DELAY_MS || 800);
 
 const app = express();
 const server = http.createServer(app);
@@ -88,12 +86,11 @@ function driveBots(code) {
     try {
       applyMove(r.game, a.player, move);
     } catch (err) {
-      // A bot should never make an illegal move; bail out safely if it does.
       return;
     }
     emitGame(r);
     driveBots(code);
-  }, BOT_DELAY);
+  }, r.botDelay || DEFAULT_BOT_DELAY);
 }
 
 function seatIndexOf(room, socketId) {
@@ -103,10 +100,11 @@ function seatIndexOf(room, socketId) {
 // ── Socket handlers ───────────────────────────────────────────────────────
 
 io.on('connection', (socket) => {
-  socket.on('createRoom', ({ name, lang } = {}) => {
+  socket.on('createRoom', ({ name, lang, botDelayMs } = {}) => {
     const existing = rm.findRoomBySocket(socket.id);
     if (existing) return socket.emit('errorMsg', 'already_in_room');
     const room = rm.createRoom(socket.id, name, lang || 'hu');
+    room.botDelay = Number(botDelayMs) || DEFAULT_BOT_DELAY;
     socket.emit('joined', { code: room.code });
     emitLobby(room);
   });
@@ -119,10 +117,11 @@ io.on('connection', (socket) => {
     emitLobby(res.room);
   });
 
-  socket.on('singleplayer', ({ name, lang, bots } = {}) => {
+  socket.on('singleplayer', ({ name, lang, bots, botDelayMs } = {}) => {
     const existing = rm.findRoomBySocket(socket.id);
     if (existing) return socket.emit('errorMsg', 'already_in_room');
     const room = rm.createRoom(socket.id, name, lang || 'hu', { single: true });
+    room.botDelay = Number(botDelayMs) || DEFAULT_BOT_DELAY;
     const botCount = Math.min(Math.max(Number(bots) || 1, 1), MAX_SEATS - 1);
     for (let i = 0; i < botCount; i++) rm.addBot(room);
     rm.startGame(room);

@@ -92,13 +92,18 @@
     return n || (lang === 'hu' ? 'Játékos' : 'Player');
   }
 
+  function myBotDelay() {
+    return Number(localStorage.getItem('burge_bot_ms')) || 800;
+  }
+
   $('btn-single').onclick = () =>
     socket.emit('singleplayer', {
       name: myName(),
       lang,
       bots: Number($('bot-count').value),
+      botDelayMs: myBotDelay(),
     });
-  $('btn-create').onclick = () => socket.emit('createRoom', { name: myName(), lang });
+  $('btn-create').onclick = () => socket.emit('createRoom', { name: myName(), lang, botDelayMs: myBotDelay() });
   $('btn-join').onclick = () => {
     const code = ($('code-input').value || '').trim().toUpperCase();
     if (code.length < 4) return toast(t(lang, 'err_no_room'));
@@ -176,7 +181,7 @@
     return rects;
   }
 
-  // `land`: 'pile' (default) shrinks + fades into a discard/hand pile;
+  // `land`: 'pile' (default) flies to the pile center, then shrinks away;
   // 'place' arrives at full size/opacity, landing flat as a table card.
   function spawnFlyingCard(cardId, fromRect, toRect, delay, land) {
     land = land || 'pile';
@@ -189,7 +194,7 @@
     el.style.width = fromRect.width + 'px';
     el.style.height = fromRect.height + 'px';
     document.body.appendChild(el);
-    void el.offsetWidth; // force layout so the transition below actually animates
+    void el.offsetWidth;
     setTimeout(() => {
       if (land === 'place') {
         el.style.left = toRect.left + 'px';
@@ -203,11 +208,14 @@
         const destY = toRect.top + toRect.height / 2 - fromRect.height / 2;
         el.style.left = destX + 'px';
         el.style.top = destY + 'px';
-        el.style.transform = `scale(0.45) rotate(${(Math.random() * 30 - 15).toFixed(1)}deg)`;
-        el.style.opacity = '0.1';
+        el.style.opacity = '1';
+        setTimeout(() => {
+          el.style.transform = `scale(0.45) rotate(${(Math.random() * 30 - 15).toFixed(1)}deg)`;
+          el.style.opacity = '0.1';
+        }, ANIM_MS + 300);
       }
     }, delay);
-    setTimeout(() => el.remove(), delay + ANIM_MS + 150);
+    setTimeout(() => el.remove(), delay + ANIM_MS * 2 + 600);
   }
 
   function pointRect(cx, cy, w, h) {
@@ -919,6 +927,11 @@
   $('name-input').value = localStorage.getItem('burge_name') || '';
   applyAnimSpeed(Number(localStorage.getItem('burge_anim_ms')) || 900);
   $('anim-speed').addEventListener('change', (e) => applyAnimSpeed(Number(e.target.value)));
+  const bs = $('bot-speed');
+  if (bs) {
+    bs.value = String(myBotDelay());
+    bs.addEventListener('change', (e) => localStorage.setItem('burge_bot_ms', e.target.value));
+  }
   applyStaticI18n();
   buildRules();
 })();
