@@ -226,6 +226,234 @@ io.on('connection', (socket) => {
   });
 });
 
+// ── Royal Game of Ur namespace ──────────────────────────────────────────
+
+const urEngine = require('./game/ur/engine');
+const urBot = require('./game/ur/bot');
+
+const urIo = io.of('/ur');
+const urRooms = new Map(); // code → ur room state
+
+function urMakeCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code;
+  do { code = ''; for (let i = 0; i < 4; i++) code += chars[Math.floor(Math.random() * chars.length)]; }
+  while (urRooms.has(code));
+  return code;
+}
+
+function urEmitGame(room) {
+  if (!room.game) return;
+  for (const seat of room.seats) {
+    if (seat.socketId) {
+      const s = urIo.sockets.sockets.get(seat.socketId);
+      if (s) s.emit('game', { view: urEngine.viewFor(room.game, seat.playerIdx) });
+    }
+  }
+}
+
+function urEmitLobby(room) {
+  const payload = {
+    code: room.code,
+    hostId: room.hostId,
+    seats: room.seats.map((s) => ({
+      sid: s.socketId,
+      name: s.name,
+      isBot: s.isBot,
+      connected: true,
+    })),
+  };
+  for (const seat of room.seats) {
+    if (seat.socketId) {
+      const s = urIo.sockets.sockets.get(seat.socketId);
+      if (s) s.emit('lobby', payload);
+    }
+  }
+}
+
+function urDriveBots(code) {
+  const room = urRooms.get(code);
+  if (!room || !room.game || room.game.phase === 'over') return;
+  const actor = urEngine.currentActor(room.game);
+  if (!actor) return;
+  const seat = room.seats[actor.player];
+  if (!seat || !seat.isBot) return;
+
+  setTimeout(() => {
+    const r = urRooms.get(code);
+    if (!r || !r.game || r.game.phase === 'over') return;
+    const a = urEngine.currentActor(r.game);
+    if (!a) return;
+    const s = r.seats[a.player];
+    if (!s || !s.isBot) return;
+
+    if (r.game.phase === 'roll') {
+      r.game.lastRoll = urEngine.rollDice(Math.random);
+      const moves = urEngine.legalMoves(r.game, a.player, r.game.lastRoll);
+      if (moves.length === 0) {
+        r.game.turn = 1 - r.game.turn;
+        r.game.phase = 'roll';
+        r.game.lastRoll = null;
+        urEmitGame(r);
+        urDriveBots(code);
+        return;
+      }
+      r.game.phase = 'move';
+      urEmitGame(r);
+      urDriveBots(code);
+      return;
+    }
+
+    if (r.game.phase === 'move') {
+      const move = urBot.chooseMove(r.game, a.player);
+      if (!move) { urDriveBots(code); return; }
+      try { urEngine.applyMove(r.game, a.player, move); } catch (e) { /* skip */ }
+      urEmitGame(r);
+      urDriveBots(code);
+    }
+  }, room.botDelay || 700);
+}
+
+urIo.on('connection', (socket) => {
+  function urSeatIdx(room) {
+    return room.seats.findIndex((s) => s.socketId === socket.id);
+  }
+
+  socket.on('createRoom', ({ name, botDelayMs } = {}) => {
+    const code = urMakeCode();
+    const room = {
+      code,
+      hostId: socket.id,
+      botDelay: Number(botDelayMs) || 700,
+      seats: [{ name: name || 'Player', isBot: false, socketId: socket.id, playerIdx: 0 }],
+      game: null,
+    };
+    urRooms.set(code, room);
+    socket.emit('joined', { code });
+    urEmitLobby(room);
+  });
+
+  socket.on('joinRoom', ({ code, name } = {}) => {
+    const room = urRooms.get(String(code || '').trim().toUpperCase());
+    if (!room) return socket.emit('errorMsg', 'Room not found');
+    if (room.seats.length >= 2) return socket.emit('errorMsg', 'Room full');
+    if (room.game) return socket.emit('errorMsg', 'Game in progress');
+    room.seats.push({ name: name || 'Player', isBot: false, socketId: socket.id, playerIdx: 1 });
+    socket.emit('joined', { code });
+    urEmitLobby(room);
+  });
+
+  socket.on('singleplayer', ({ name, botDelayMs } = {}) => {
+    const code = urMakeCode();
+    const room = {
+      code,
+      hostId: socket.id,
+      botDelay: Number(botDelayMs) || 700,
+      seats: [
+        { name: name || 'You', isBot: false, socketId: socket.id, playerIdx: 0 },
+        { name: 'Bot', isBot: true, socketId: null, playerIdx: 1 },
+      ],
+      game: urEngine.createGame([{ id: 'p0', name: name || 'You', isBot: false }, { id: 'p1', name: 'Bot', isBot: true }]),
+    };
+    urRooms.set(code, room);
+    socket.emit('joined', { code });
+    urEmitGame(room);
+    urDriveBots(code);
+  });
+
+  socket.on('startGame', () => {
+    const room = urRooms.get([...urRooms.entries()].find(([, r]) => r.hostId === socket.id)?.[0]);
+    if (!room || room.hostId !== socket.id) return;
+    if (room.seats.length < 2) return socket.emit('errorMsg', 'Need 2 players');
+    room.game = urEngine.createGame(room.seats.map((s, i) => ({
+      id: 'p' + i, name: s.name, isBot: s.isBot,
+    })));
+    urEmitGame(room);
+    urDriveBots(room.code);
+  });
+
+  socket.on('roll', () => {
+    const entry = [...urRooms.entries()].find(([, r]) =>
+      r.seats.some((s) => s.socketId === socket.id));
+    if (!entry) return;
+    const room = entry[1];
+    const si = urSeatIdx(room);
+    if (si === -1 || room.game.turn !== si || room.game.phase !== 'roll') return;
+
+    room.game.lastRoll = urEngine.rollDice(Math.random);
+    const moves = urEngine.legalMoves(room.game, si, room.game.lastRoll);
+    if (moves.length === 0) {
+      room.game.turn = 1 - room.game.turn;
+      room.game.phase = 'roll';
+      room.game.lastRoll = null;
+    } else {
+      room.game.phase = 'move';
+    }
+    urEmitGame(room);
+    urDriveBots(room.code);
+  });
+
+  socket.on('move', ({ piece, destPos }) => {
+    const entry = [...urRooms.entries()].find(([, r]) =>
+      r.seats.some((s) => s.socketId === socket.id));
+    if (!entry) return;
+    const room = entry[1];
+    const si = urSeatIdx(room);
+    if (si === -1 || room.game.turn !== si || room.game.phase !== 'move') return;
+
+    // Find the move: need to match piece index and destination
+    const moves = urEngine.legalMoves(room.game, si, room.game.lastRoll);
+    const move = moves.find((m) => {
+      if (m.piece !== piece) return false;
+      if (m.action === 'bearOff') return destPos === -1; // bear off
+      return m.dest !== undefined && urEngine.positionOf(si, m.dest) === destPos;
+    });
+    if (!move) return socket.emit('errorMsg', 'Invalid move');
+
+    try { urEngine.applyMove(room.game, si, move); } catch (e) {
+      return socket.emit('errorMsg', String(e.message));
+    }
+    urEmitGame(room);
+    urDriveBots(room.code);
+  });
+
+  socket.on('leaveRoom', () => {
+    const entry = [...urRooms.entries()].find(([, r]) =>
+      r.seats.some((s) => s.socketId === socket.id));
+    if (!entry) return socket.emit('leftRoom');
+    const room = entry[1];
+    const seat = room.seats.find((s) => s.socketId === socket.id);
+    if (seat) seat.isBot = true;
+    urRooms.delete(entry[0]);
+    socket.emit('leftRoom');
+  });
+
+  socket.on('rematch', () => {
+    const entry = [...urRooms.entries()].find(([, r]) =>
+      r.hostId === socket.id);
+    if (!entry) return;
+    const room = entry[1];
+    if (!room.game || room.game.phase !== 'over') return;
+    room.game = urEngine.createGame(room.seats.map((s, i) => ({
+      id: 'p' + i, name: s.name, isBot: s.isBot,
+    })));
+    urEmitGame(room);
+    urDriveBots(entry[0]);
+  });
+
+  socket.on('disconnect', () => {
+    const entry = [...urRooms.entries()].find(([, r]) =>
+      r.seats.some((s) => s.socketId === socket.id));
+    if (!entry) return;
+    const room = entry[1];
+    const seat = room.seats.find((s) => s.socketId === socket.id);
+    if (seat) { seat.isBot = true; seat.socketId = null; }
+    if (!room.seats.some((s) => s.socketId)) {
+      urRooms.delete(entry[0]);
+    }
+  });
+});
+
 server.listen(PORT, () => {
   console.log(`Bürge / Hühü server running on http://localhost:${PORT}`);
 });

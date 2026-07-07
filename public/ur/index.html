@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Royal Game of Ur</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Royal Game of Ur</div>
+    <div class="topbar-right">
+      <button id="btn-back" class="ghost">← Back</button>
+    </div>
+  </header>
+
+  <main id="app">
+    <!-- MENU -->
+    <section id="screen-menu" class="screen active">
+      <div class="menu-card">
+        <h1>Royal Game of Ur</h1>
+        <p class="subtitle">4600-year-old Mesopotamian race game — 2 players</p>
+
+        <label class="field">
+          <span>Your name</span>
+          <input id="name-input" type="text" maxlength="12" placeholder="Enter your name" />
+        </label>
+
+        <label class="field inline">
+          <span>Bot speed</span>
+          <select id="bot-speed">
+            <option value="400">Fast</option>
+            <option value="700" selected>Normal</option>
+            <option value="1200">Slow</option>
+          </select>
+        </label>
+
+        <div class="menu-actions">
+          <button id="btn-single" class="primary">Singleplayer (vs bot)</button>
+          <div class="divider"></div>
+          <button id="btn-create">Create room</button>
+          <div class="join-row">
+            <input id="code-input" type="text" maxlength="4" placeholder="ROOM CODE" />
+            <button id="btn-join">Join</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- LOBBY -->
+    <section id="screen-lobby" class="screen">
+      <div class="menu-card">
+        <h2>Lobby</h2>
+        <div class="code-box">
+          <span>Code</span>
+          <strong id="lobby-code">----</strong>
+          <button id="btn-copy" class="ghost small">Copy</button>
+        </div>
+        <ul id="seat-list" class="seat-list"></ul>
+        <div class="lobby-actions">
+          <button id="btn-start" class="primary">Start game</button>
+          <button id="btn-leave-lobby" class="ghost">Leave</button>
+        </div>
+        <p id="lobby-hint" class="hint"></p>
+      </div>
+    </section>
+
+    <!-- GAME -->
+    <section id="screen-game" class="screen">
+      <div class="table-ur">
+        <div class="opp-panel" id="opp-panel">
+          <div class="opp-name" id="opp-name">Bot</div>
+          <div class="opp-pieces">
+            <span id="opp-home">●●●●●●●</span>
+            <span id="opp-off" class="off-count"></span>
+          </div>
+        </div>
+
+        <div class="board" id="board"></div>
+
+        <div class="dice-area">
+          <button id="btn-roll" class="primary roll-btn">🎲 Roll dice</button>
+          <div id="roll-result" class="roll-result"></div>
+        </div>
+
+        <div class="turn-info" id="turn-info"></div>
+
+        <div class="my-panel">
+          <div class="my-pieces" id="my-pieces-info">
+            <span>Pieces remaining: <b id="my-remaining">7</b></span>
+          </div>
+        </div>
+      </div>
+
+      <aside class="sidelog">
+        <h3>Log</h3>
+        <ul id="log-list"></ul>
+      </aside>
+    </section>
+  </main>
+
+  <div id="overlay" class="overlay">
+    <div class="overlay-card">
+      <h2 id="over-title"></h2>
+      <div class="overlay-actions">
+        <button id="btn-rematch" class="primary">Rematch</button>
+        <button id="btn-menu" class="ghost">Menu</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="client.js"></script>
+</body>
+</html>
