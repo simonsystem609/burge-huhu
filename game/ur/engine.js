@@ -268,8 +268,6 @@ function viewFor(state, playerIndex) {
 
     // Constants for the client
     path: pathFor(playerIndex),
-    isShared: (pos) => SHARED.has(pos),
-    isRosette: (pos) => ROSETTES.has(pos),
   };
 }
 

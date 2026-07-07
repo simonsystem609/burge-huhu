@@ -247,7 +247,9 @@ function urEmitGame(room) {
   for (const seat of room.seats) {
     if (seat.socketId) {
       const s = urIo.sockets.sockets.get(seat.socketId);
-      if (s) s.emit('game', { view: urEngine.viewFor(room.game, seat.playerIdx) });
+      if (s) {
+        try { s.emit('game', { view: urEngine.viewFor(room.game, seat.playerIdx) }); } catch (e) { /* skip */ }
+      }
     }
   }
 }
@@ -305,7 +307,8 @@ function urDriveBots(code) {
     }
 
     if (r.game.phase === 'move') {
-      const move = urBot.chooseMove(r.game, a.player);
+      let move;
+      try { move = urBot.chooseMove(r.game, a.player); } catch (e) { move = null; }
       if (!move) {
         r.game.turn = 1 - r.game.turn;
         r.game.phase = 'roll';
@@ -459,6 +462,13 @@ urIo.on('connection', (socket) => {
       urRooms.delete(entry[0]);
     }
   });
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled rejection:', reason);
 });
 
 server.listen(PORT, () => {
