@@ -90,7 +90,7 @@ function driveBots(code) {
     }
     emitGame(r);
     driveBots(code);
-  }, r.botDelay || DEFAULT_BOT_DELAY);
+  }, room.botDelay || DEFAULT_BOT_DELAY);
 }
 
 function seatIndexOf(room, socketId) {
