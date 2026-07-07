@@ -306,7 +306,14 @@ function urDriveBots(code) {
 
     if (r.game.phase === 'move') {
       const move = urBot.chooseMove(r.game, a.player);
-      if (!move) { urDriveBots(code); return; }
+      if (!move) {
+        r.game.turn = 1 - r.game.turn;
+        r.game.phase = 'roll';
+        r.game.lastRoll = null;
+        urEmitGame(r);
+        urDriveBots(code);
+        return;
+      }
       try { urEngine.applyMove(r.game, a.player, move); } catch (e) { /* skip */ }
       urEmitGame(r);
       urDriveBots(code);
