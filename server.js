@@ -246,7 +246,7 @@ function urEmitGame(room) {
   if (!room.game) return;
   for (const seat of room.seats) {
     if (seat.socketId) {
-      const s = urIo.sockets.sockets.get(seat.socketId);
+      const s = urIo.sockets.get(seat.socketId);
       if (s) {
         try { s.emit('game', { view: urEngine.viewFor(room.game, seat.playerIdx) }); } catch (e) { /* skip */ }
       }
@@ -267,7 +267,7 @@ function urEmitLobby(room) {
   };
   for (const seat of room.seats) {
     if (seat.socketId) {
-      const s = urIo.sockets.sockets.get(seat.socketId);
+      const s = urIo.sockets.get(seat.socketId);
       if (s) s.emit('lobby', payload);
     }
   }
