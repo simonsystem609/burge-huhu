@@ -82,9 +82,6 @@
           <button id="btn-roll" class="primary roll-btn">Roll dice</button>
           <div id="roll-result" class="roll-result"></div>
         </div>
-        <div class="move-area">
-          <button id="btn-bear-off" class="ghost" style="display:none">Bear off</button>
-        </div>
 
         <div class="turn-info" id="turn-info"></div>
 

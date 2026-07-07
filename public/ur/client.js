@@ -5,7 +5,7 @@
   const socket = io('/ur', { reconnection: true, reconnectionDelay: 800, reconnectionDelayMax: 4000 });
 
   // Board layout (matches engine):
-  //   Left block (3×4):       Bridge:       Right block (3×2):
+  //   Left block (3x4):       Bridge:       Right block (3x2):
   //   [ 0][ 1][ 2][ 3]         .  .         [14][15]
   //   [ 4][ 5][ 6][ 7]       [12][13]       [16][17]
   //   [ 8][ 9][10][11]         .  .         [18][19]
@@ -38,8 +38,9 @@
   const $ = function (id) { return document.getElementById(id); };
 
   let lastView = null;
-  let selectedPiece = null;
-  let legalDests = [];
+
+  // Map of destPos -> piece index for legal moves
+  let legalMoveMap = null;
 
   function showScreen(id) {
     document.querySelectorAll('.screen').forEach(function (s) {
@@ -94,6 +95,57 @@
     socket.emit('leaveRoom');
   };
 
+  // ── Legal move computation ──────────────
+  // Builds a map: destPos -> [pieceIdx, ...]
+  function computeLegalMoves(view) {
+    var map = {};
+    if (!view.path || view.lastRoll == null) return map;
+    var path = view.path;
+    var roll = view.lastRoll;
+
+    for (var i = 0; i < view.pieces.length; i++) {
+      var curStep = view.pieces[i].step;
+      var destPos = null;
+
+      if (curStep === -1) {
+        // Piece at home: can enter if roll > 0 and entry not blocked
+        if (roll === 0) continue;
+        var entryPos = path[0];
+        var blocked = false;
+        if (view.board && view.board[entryPos]) {
+          for (var k = 0; k < view.board[entryPos].length; k++) {
+            if (view.board[entryPos][k].player === view.you) { blocked = true; break; }
+          }
+        }
+        if (!blocked) destPos = entryPos;
+      } else {
+        // Piece on board
+        var remaining = path.length - curStep;
+        if (roll === remaining) {
+          // Bear off: use -1 as sentinel
+          destPos = -1;
+        } else if (roll < remaining) {
+          var destStep = curStep + roll;
+          var dp = path[destStep];
+          // Check not blocked by own piece
+          var blocked2 = false;
+          if (view.board && view.board[dp]) {
+            for (var j = 0; j < view.board[dp].length; j++) {
+              if (view.board[dp][j].player === view.you) { blocked2 = true; break; }
+            }
+          }
+          if (!blocked2) destPos = dp;
+        }
+      }
+
+      if (destPos !== null) {
+        if (!map[destPos]) map[destPos] = [];
+        map[destPos].push(i);
+      }
+    }
+    return map;
+  }
+
   // ── Render ──────────────────────────────
   function renderBoard(view) {
     var board = $('board');
@@ -105,11 +157,16 @@
       if (ROSETTES.has(p.id)) sq.classList.add('rosette');
       else if (SHARED.has(p.id)) sq.classList.add('shared');
       else sq.classList.add('safe');
+
+      // Highlight if legal destination
+      var isLegal = legalMoveMap && legalMoveMap[p.id] && legalMoveMap[p.id].length > 0;
+      if (isLegal) sq.classList.add('legal-dest');
+
       sq.style.gridColumn = String(p.col);
       sq.style.gridRow = String(p.row);
       sq.setAttribute('data-pos', p.id);
 
-      // Add rosette star symbol
+      // Rosette star
       if (ROSETTES.has(p.id)) {
         var star = document.createElement('span');
         star.className = 'rosette-star';
@@ -117,7 +174,7 @@
         sq.appendChild(star);
       }
 
-      // Add pieces
+      // Pieces
       if (view.board && view.board[p.id]) {
         view.board[p.id].forEach(function (occ) {
           var piece = document.createElement('div');
@@ -129,21 +186,6 @@
 
       board.appendChild(sq);
     });
-
-    // Highlight legal destinations
-    document.querySelectorAll('#board .sq').forEach(function (sq) {
-      sq.classList.remove('selectable', 'legal-dest');
-    });
-    if (legalDests.length > 0) {
-      legalDests.forEach(function (destPos) {
-        var sq = document.querySelector('#board .sq[data-pos="' + destPos + '"]');
-        if (sq) sq.classList.add('legal-dest');
-      });
-    }
-    if (selectedPiece != null) {
-      var selSq = document.querySelector('#board .sq[data-pos="' + selectedPiece.boardPos + '"]');
-      if (selSq) selSq.classList.add('selectable');
-    }
   }
 
   function homeDots(n) {
@@ -156,6 +198,14 @@
 
   function render(view) {
     lastView = view;
+
+    // Compute legal moves in move phase
+    if (view.phase === 'move' && view.turn === view.you) {
+      legalMoveMap = computeLegalMoves(view);
+    } else {
+      legalMoveMap = null;
+    }
+
     showScreen('screen-game');
 
     // Opponent panel
@@ -180,6 +230,16 @@
     rollBtn.disabled = !isMyRoll;
     rollBtn.textContent = isMyRoll ? 'Roll dice' : 'Wait...';
 
+    // Bear-off button
+    var bearOffBtn = $('btn-bear-off');
+    var canBearOff = legalMoveMap && legalMoveMap[-1] && legalMoveMap[-1].length > 0;
+    if (canBearOff) {
+      bearOffBtn.style.display = 'inline-block';
+      bearOffBtn.textContent = 'Bear off (' + legalMoveMap[-1].length + ' pieces)';
+    } else {
+      bearOffBtn.style.display = 'none';
+    }
+
     // Turn info
     var turnInfo = $('turn-info');
     if (view.phase === 'over') {
@@ -187,7 +247,12 @@
     } else if (isMyRoll) {
       turnInfo.textContent = view.extraRoll ? 'Extra roll! Roll again.' : 'Your turn \u2014 roll the dice!';
     } else if (view.turn === view.you) {
-      turnInfo.textContent = 'Select a piece to move ' + view.lastRoll + ' steps.';
+      var numMoves = legalMoveMap ? Object.keys(legalMoveMap).length : 0;
+      if (numMoves > 0) {
+        turnInfo.textContent = 'Click a highlighted square to move ' + view.lastRoll + ' steps.';
+      } else {
+        turnInfo.textContent = 'No legal moves available.';
+      }
     } else {
       turnInfo.textContent = view.opponent ? 'Waiting for ' + view.opponent.name + '...' : 'Waiting...';
     }
@@ -201,9 +266,9 @@
     (view.log || []).forEach(function (e) {
       var li = document.createElement('li');
       var desc = e.key;
-      if (e.key === 'move') desc = 'P' + e.params.player + ' \u2192 pos ' + e.params.pos;
+      if (e.key === 'move') desc = 'P' + e.params.player + ' to pos ' + e.params.pos;
       else if (e.key === 'capture') desc = 'P' + e.params.player + ' captured P' + e.params.opponent;
-      else if (e.key === 'bearOff') desc = 'P' + e.params.player + ' borne off';
+      else if (e.key === 'bearOff') desc = 'P' + e.params.player + ' bears off';
       else if (e.key === 'win') desc = 'P' + e.params.player + ' wins!';
       li.textContent = desc;
       logList.appendChild(li);
@@ -223,91 +288,30 @@
     socket.emit('roll');
   };
 
-  // Click on board square
+  // Bear off button
+  $('btn-bear-off').onclick = function () {
+    if (!legalMoveMap || !legalMoveMap[-1] || legalMoveMap[-1].length === 0) return;
+    // Bear off the first piece that can bear off
+    var piece = legalMoveMap[-1][0];
+    socket.emit('move', { piece: piece, destPos: -1 });
+    legalMoveMap = null;
+  };
+
+  // Click on board square → move if it's a legal destination
   $('board').addEventListener('click', function (e) {
     var sq = e.target.closest('.sq');
     if (!sq || !lastView) return;
     if (lastView.turn !== lastView.you || lastView.phase !== 'move') return;
     var pos = parseInt(sq.getAttribute('data-pos'));
+    if (isNaN(pos) || !legalMoveMap) return;
 
-    // Find own piece on this square
-    var ownPiece = null;
-    if (lastView.board && lastView.board[pos]) {
-      for (var i = 0; i < lastView.board[pos].length; i++) {
-        if (lastView.board[pos][i].player === lastView.you) {
-          ownPiece = lastView.board[pos][i];
-          break;
-        }
-      }
-    }
+    var pieces = legalMoveMap[pos];
+    if (!pieces || pieces.length === 0) return;
 
-    // If clicking on own piece and no piece selected yet → select it
-    if (ownPiece && selectedPiece == null) {
-      selectedPiece = { piece: ownPiece.piece, boardPos: pos, step: ownPiece.step };
-      // Compute legal destinations for this piece
-      computeLegalDests(lastView, ownPiece.piece);
-      renderBoard(lastView);
-      return;
-    }
-
-    // If a piece is selected and clicking a legal destination → move
-    if (selectedPiece != null && legalDests.indexOf(pos) !== -1) {
-      socket.emit('move', { piece: selectedPiece.piece, destPos: pos });
-      selectedPiece = null;
-      legalDests = [];
-      return;
-    }
-
-    // Otherwise deselect
-    selectedPiece = null;
-    legalDests = [];
-    renderBoard(lastView);
+    // Move the first matching piece
+    socket.emit('move', { piece: pieces[0], destPos: pos });
+    legalMoveMap = null;
   });
-
-  function computeLegalDests(view, pieceIdx) {
-    legalDests = [];
-    if (!view.path || view.lastRoll == null) return;
-    var path = view.path;
-    var roll = view.lastRoll;
-
-    // Find the piece's current step
-    var myPieces = view.pieces;
-    if (!myPieces || !myPieces[pieceIdx]) return;
-    var curStep = myPieces[pieceIdx].step;
-
-    if (curStep === -1) {
-      // Piece is at home — can enter at step 0 if roll allows
-      if (roll > 0) {
-        var entryPos = path[0];
-        // Check if entry is not blocked by own piece
-        var blocked = false;
-        if (view.board && view.board[entryPos]) {
-          for (var i = 0; i < view.board[entryPos].length; i++) {
-            if (view.board[entryPos][i].player === view.you) { blocked = true; break; }
-          }
-        }
-        if (!blocked) legalDests.push(entryPos);
-      }
-      return;
-    }
-
-    var remaining = path.length - curStep;
-    if (roll === remaining) {
-      // Bear off
-      legalDests.push(-1); // -1 signals bear off
-    } else if (roll < remaining) {
-      var destStep = curStep + roll;
-      var destPos = path[destStep];
-      // Check not blocked by own piece
-      var blocked2 = false;
-      if (view.board && view.board[destPos]) {
-        for (var j = 0; j < view.board[destPos].length; j++) {
-          if (view.board[destPos][j].player === view.you) { blocked2 = true; break; }
-        }
-      }
-      if (!blocked2) legalDests.push(destPos);
-    }
-  }
 
   // ── Lobby ────────────────────────────────
   function renderLobby(payload) {
@@ -334,8 +338,6 @@
   // ── Socket events ────────────────────────
   socket.on('lobby', renderLobby);
   socket.on('game', function (data) {
-    selectedPiece = null;
-    legalDests = [];
     render(data.view);
   });
   socket.on('errorMsg', function (msg) { toast(msg); });
