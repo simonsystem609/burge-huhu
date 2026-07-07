@@ -47,10 +47,10 @@ body {
 
 /* Layout */
 #app { flex: 1; display: flex; }
-.screen { display: none; width: 100%; }
-.screen.active { display: flex; }
+.screen { display: none; flex: 1; }
+.screen.active { display: flex; flex: 1; }
 #screen-menu.active, #screen-lobby.active { justify-content: center; align-items: flex-start; padding: 40px 16px; }
-#screen-game.active { align-items: stretch; }
+#screen-game.active { align-items: stretch; flex: 1; }
 
 /* Buttons */
 button {
