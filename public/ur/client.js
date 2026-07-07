@@ -3,36 +3,43 @@
   'use strict';
 
   const socket = io('/ur', { reconnection: true, reconnectionDelay: 800, reconnectionDelayMax: 4000 });
+
+  // Board layout (matches engine):
+  //   Left block (3×4):       Bridge:       Right block (3×2):
+  //   [ 0][ 1][ 2][ 3]         .  .         [14][15]
+  //   [ 4][ 5][ 6][ 7]       [12][13]       [16][17]
+  //   [ 8][ 9][10][11]         .  .         [18][19]
   const POSITIONS = [
-    { id: 0, col: 5, row: 3 },
-    { id: 1, col: 6, row: 3 },
-    { id: 2, col: 7, row: 3 },
-    { id: 3, col: 8, row: 3 },
-    { id: 4, col: 5, row: 2 },
-    { id: 5, col: 6, row: 2 },
-    { id: 6, col: 7, row: 2 },
-    { id: 7, col: 8, row: 2 },
-    { id: 8, col: 5, row: 4 },
-    { id: 9, col: 6, row: 4 },
-    { id: 10, col: 7, row: 4 },
-    { id: 11, col: 8, row: 4 },
-    { id: 12, col: 5, row: 1 },
-    { id: 13, col: 6, row: 1 },
+    { id: 0,  col: 1, row: 1 },
+    { id: 1,  col: 2, row: 1 },
+    { id: 2,  col: 3, row: 1 },
+    { id: 3,  col: 4, row: 1 },
+    { id: 4,  col: 1, row: 2 },
+    { id: 5,  col: 2, row: 2 },
+    { id: 6,  col: 3, row: 2 },
+    { id: 7,  col: 4, row: 2 },
+    { id: 8,  col: 1, row: 3 },
+    { id: 9,  col: 2, row: 3 },
+    { id: 10, col: 3, row: 3 },
+    { id: 11, col: 4, row: 3 },
+    { id: 12, col: 5, row: 2 },
+    { id: 13, col: 6, row: 2 },
     { id: 14, col: 7, row: 1 },
     { id: 15, col: 8, row: 1 },
-    { id: 16, col: 10, row: 2 },
-    { id: 17, col: 10, row: 3 },
-    { id: 18, col: 11, row: 2 },
-    { id: 19, col: 11, row: 3 },
+    { id: 16, col: 7, row: 2 },
+    { id: 17, col: 8, row: 2 },
+    { id: 18, col: 7, row: 3 },
+    { id: 19, col: 8, row: 3 },
   ];
-  // Shared zone: positions 0-7
-  const SHARED = new Set([0, 1, 2, 3, 4, 5, 6, 7]);
-  const ROSETTES = new Set([4, 8, 12, 14, 17]);
+
+  const SHARED = new Set([4, 5, 6, 7, 12, 13, 16, 17]);
+  const ROSETTES = new Set([0, 4, 8, 14, 18]);
 
   const $ = function (id) { return document.getElementById(id); };
 
   let lastView = null;
   let selectedPiece = null;
+  let legalDests = [];
 
   function showScreen(id) {
     document.querySelectorAll('.screen').forEach(function (s) {
@@ -40,7 +47,7 @@
     });
   }
 
-  let toastTimer = null;
+  var toastTimer = null;
   function toast(msg) {
     var el = $('toast');
     el.textContent = msg;
@@ -96,15 +103,26 @@
       var sq = document.createElement('div');
       sq.className = 'sq';
       if (ROSETTES.has(p.id)) sq.classList.add('rosette');
-      if (SHARED.has(p.id)) sq.classList.add('shared');
+      else if (SHARED.has(p.id)) sq.classList.add('shared');
+      else sq.classList.add('safe');
       sq.style.gridColumn = String(p.col);
       sq.style.gridRow = String(p.row);
       sq.setAttribute('data-pos', p.id);
 
+      // Add rosette star symbol
+      if (ROSETTES.has(p.id)) {
+        var star = document.createElement('span');
+        star.className = 'rosette-star';
+        star.textContent = '\u2605';
+        sq.appendChild(star);
+      }
+
+      // Add pieces
       if (view.board && view.board[p.id]) {
         view.board[p.id].forEach(function (occ) {
           var piece = document.createElement('div');
           piece.className = 'piece p' + occ.player;
+          if (occ.player === view.you) piece.classList.add('mine');
           sq.appendChild(piece);
         });
       }
@@ -112,10 +130,28 @@
       board.appendChild(sq);
     });
 
-    // Enable clicks on squares that represent legal destinations
+    // Highlight legal destinations
     document.querySelectorAll('#board .sq').forEach(function (sq) {
-      sq.classList.remove('selectable');
+      sq.classList.remove('selectable', 'legal-dest');
     });
+    if (legalDests.length > 0) {
+      legalDests.forEach(function (destPos) {
+        var sq = document.querySelector('#board .sq[data-pos="' + destPos + '"]');
+        if (sq) sq.classList.add('legal-dest');
+      });
+    }
+    if (selectedPiece != null) {
+      var selSq = document.querySelector('#board .sq[data-pos="' + selectedPiece.boardPos + '"]');
+      if (selSq) selSq.classList.add('selectable');
+    }
+  }
+
+  function homeDots(n) {
+    var dots = '';
+    for (var i = 0; i < 7; i++) {
+      dots += i < n ? '\u25CF' : '\u25CB';
+    }
+    return dots;
   }
 
   function render(view) {
@@ -140,15 +176,16 @@
     $('roll-result').textContent = view.lastRoll != null ? String(view.lastRoll) : '';
 
     var rollBtn = $('btn-roll');
-    rollBtn.disabled = view.phase !== 'roll' || view.turn !== view.you;
-    rollBtn.textContent = view.phase === 'roll' && view.turn === view.you ? '🎲 Roll dice' : '🎲 Wait...';
+    var isMyRoll = view.phase === 'roll' && view.turn === view.you;
+    rollBtn.disabled = !isMyRoll;
+    rollBtn.textContent = isMyRoll ? 'Roll dice' : 'Wait...';
 
     // Turn info
     var turnInfo = $('turn-info');
     if (view.phase === 'over') {
       turnInfo.textContent = view.winner === view.you ? 'You win!' : (view.winner === null ? 'Draw!' : view.opponent.name + ' wins!');
-    } else if (view.phase === 'roll' && view.turn === view.you) {
-      turnInfo.textContent = view.extraRoll ? 'Extra roll! Roll again.' : 'Your turn — roll the dice!';
+    } else if (isMyRoll) {
+      turnInfo.textContent = view.extraRoll ? 'Extra roll! Roll again.' : 'Your turn \u2014 roll the dice!';
     } else if (view.turn === view.you) {
       turnInfo.textContent = 'Select a piece to move ' + view.lastRoll + ' steps.';
     } else {
@@ -163,7 +200,12 @@
     logList.innerHTML = '';
     (view.log || []).forEach(function (e) {
       var li = document.createElement('li');
-      li.textContent = (e.key + ': P' + e.params.player + (e.params.pos != null ? ' → pos ' + e.params.pos : ''));
+      var desc = e.key;
+      if (e.key === 'move') desc = 'P' + e.params.player + ' \u2192 pos ' + e.params.pos;
+      else if (e.key === 'capture') desc = 'P' + e.params.player + ' captured P' + e.params.opponent;
+      else if (e.key === 'bearOff') desc = 'P' + e.params.player + ' borne off';
+      else if (e.key === 'win') desc = 'P' + e.params.player + ' wins!';
+      li.textContent = desc;
       logList.appendChild(li);
     });
     logList.scrollTop = logList.scrollHeight;
@@ -176,26 +218,19 @@
     }
   }
 
-  function homeDots(n) {
-    var dots = '';
-    for (var i = 0; i < 7; i++) {
-      dots += i < n ? '●' : '○';
-    }
-    return dots;
-  }
-
   // ── Game actions ─────────────────────────
   $('btn-roll').onclick = function () {
     socket.emit('roll');
   };
 
+  // Click on board square
   $('board').addEventListener('click', function (e) {
     var sq = e.target.closest('.sq');
     if (!sq || !lastView) return;
     if (lastView.turn !== lastView.you || lastView.phase !== 'move') return;
     var pos = parseInt(sq.getAttribute('data-pos'));
 
-    // Check if this square has the player's own piece (select it)
+    // Find own piece on this square
     var ownPiece = null;
     if (lastView.board && lastView.board[pos]) {
       for (var i = 0; i < lastView.board[pos].length; i++) {
@@ -206,21 +241,73 @@
       }
     }
 
-    if (ownPiece && !selectedPiece) {
-      selectedPiece = ownPiece;
-      // Highlight this piece's legal destination
-      socket.emit('selectPiece', { piece: selectedPiece.piece });
+    // If clicking on own piece and no piece selected yet → select it
+    if (ownPiece && selectedPiece == null) {
+      selectedPiece = { piece: ownPiece.piece, boardPos: pos, step: ownPiece.step };
+      // Compute legal destinations for this piece
+      computeLegalDests(lastView, ownPiece.piece);
+      renderBoard(lastView);
       return;
     }
 
-    if (selectedPiece && pos !== undefined) {
+    // If a piece is selected and clicking a legal destination → move
+    if (selectedPiece != null && legalDests.indexOf(pos) !== -1) {
       socket.emit('move', { piece: selectedPiece.piece, destPos: pos });
       selectedPiece = null;
+      legalDests = [];
       return;
     }
 
+    // Otherwise deselect
     selectedPiece = null;
+    legalDests = [];
+    renderBoard(lastView);
   });
+
+  function computeLegalDests(view, pieceIdx) {
+    legalDests = [];
+    if (!view.path || view.lastRoll == null) return;
+    var path = view.path;
+    var roll = view.lastRoll;
+
+    // Find the piece's current step
+    var myPieces = view.pieces;
+    if (!myPieces || !myPieces[pieceIdx]) return;
+    var curStep = myPieces[pieceIdx].step;
+
+    if (curStep === -1) {
+      // Piece is at home — can enter at step 0 if roll allows
+      if (roll > 0) {
+        var entryPos = path[0];
+        // Check if entry is not blocked by own piece
+        var blocked = false;
+        if (view.board && view.board[entryPos]) {
+          for (var i = 0; i < view.board[entryPos].length; i++) {
+            if (view.board[entryPos][i].player === view.you) { blocked = true; break; }
+          }
+        }
+        if (!blocked) legalDests.push(entryPos);
+      }
+      return;
+    }
+
+    var remaining = path.length - curStep;
+    if (roll === remaining) {
+      // Bear off
+      legalDests.push(-1); // -1 signals bear off
+    } else if (roll < remaining) {
+      var destStep = curStep + roll;
+      var destPos = path[destStep];
+      // Check not blocked by own piece
+      var blocked2 = false;
+      if (view.board && view.board[destPos]) {
+        for (var j = 0; j < view.board[destPos].length; j++) {
+          if (view.board[destPos][j].player === view.you) { blocked2 = true; break; }
+        }
+      }
+      if (!blocked2) legalDests.push(destPos);
+    }
+  }
 
   // ── Lobby ────────────────────────────────
   function renderLobby(payload) {
@@ -246,7 +333,11 @@
 
   // ── Socket events ────────────────────────
   socket.on('lobby', renderLobby);
-  socket.on('game', function (data) { render(data.view); });
+  socket.on('game', function (data) {
+    selectedPiece = null;
+    legalDests = [];
+    render(data.view);
+  });
   socket.on('errorMsg', function (msg) { toast(msg); });
   socket.on('leftRoom', function () { showScreen('screen-menu'); });
   socket.on('joined', function () {});

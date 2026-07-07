@@ -3,35 +3,49 @@
 /**
  * Royal Game of Ur — pure engine, no networking.
  *
- * Board has 20 positions in a distinctive shape.
+ * Board has 20 positions in a distinctive pinched shape:
+ *
+ *   Left block (3×4):       Bridge:       Right block (3×2):
+ *   [ 0][ 1][ 2][ 3]         .  .         [14][15]
+ *   [ 4][ 5][ 6][ 7]       [12][13]       [16][17]
+ *   [ 8][ 9][10][11]         .  .         [18][19]
+ *
  * Each player has a PATH array: step index → board position.
  * Pieces start at step -1 ("home"), enter the board at step 0,
  * and are borne off after completing all PATH steps.
  *
- * Board layout (for CSS/rendering reference):
- *   row 0: .  .  .  .  12 13 14 15  .  .
- *   row 1: .  .  .  .  04 05 06 07 16 18
- *   row 2: .  .  .  .  00 01 02 03 17 19
- *   row 3: .  .  .  .  08 09 10 11  .  .
+ * Player 0 enters from bottom-left, exits via bottom-right.
+ * Player 1 enters from top-left, exits via top-right.
+ *
+ * Shared (combat) zone: positions 4-7, 12-13, 16-17 (8 squares).
+ * Rosettes: positions 0, 4, 8, 14, 18 — extra roll + safe from capture.
  *
  * Dice: 4 tetrahedral (binary) dice → sum 0-4.
  */
 
-const PATH_0 = [4, 0, 1, 2, 3, 7, 16, 18, 19, 17, 6, 5, 12, 13, 14, 15, 11, 10, 9, 8];
-const PATH_1 = [8, 9, 10, 11, 15, 14, 13, 12, 5, 6, 17, 19, 18, 16, 7, 3, 2, 1, 0, 4];
+// ── Paths (Finkel interpretation) ───────────────────────────────────────────
+
+// Player 0: enter bottom-left → right along bottom → up to middle →
+//           left along middle → through bridge → right block → bear off
+const PATH_0 = [8, 9, 10, 11, 7, 6, 5, 4, 12, 13, 17, 16, 19, 18];
+
+// Player 1: enter top-left → right along top → down to middle →
+//           left along middle → through bridge → right block → bear off
+const PATH_1 = [0, 1, 2, 3, 7, 6, 5, 4, 12, 13, 17, 16, 15, 14];
 
 const PATHS = [PATH_0, PATH_1];
 
-// Shared (combat) squares end up being positions that appear in both paths.
-// These 8 positions are where capture is possible:
-const SHARED = new Set([0, 1, 2, 3, 4, 5, 6, 7]);
+// Shared (combat) squares — 8 squares where captures are possible:
+// middle row of left block (4) + bridge (2) + middle row of right block (2)
+const SHARED = new Set([4, 5, 6, 7, 12, 13, 16, 17]);
 
-// Rosette squares: landing here gives an extra roll AND is safe from capture.
-// Approximated from surviving boards: the middle rosette in the big block,
-// the two rosettes on the small block side, etc.
-const ROSETTES = new Set([4, 8, 12, 14, 17]);
+// Rosette squares — landing here gives an extra roll AND is safe from capture.
+// Two on left block edges (entry squares), one in middle-left, two on right side.
+const ROSETTES = new Set([0, 4, 8, 14, 18]);
 
 const PIECE_COUNT = 7;
+
+// ── Dice ────────────────────────────────────────────────────────────────────
 
 function rollDice(rng) {
   rng = rng || Math.random;
@@ -41,6 +55,8 @@ function rollDice(rng) {
   }
   return total;
 }
+
+// ── Game state ──────────────────────────────────────────────────────────────
 
 function createGame(players, rng) {
   rng = rng || Math.random;
@@ -75,18 +91,16 @@ function positionOf(player, step) {
   return pathFor(player)[step];
 }
 
-// Which step index (if any) on this player's path corresponds to pos?
 function stepAt(player, pos) {
   return pathFor(player).indexOf(pos);
 }
 
-// What is currently on board position `pos`?
 function occupant(state, pos) {
   for (let p = 0; p < state.players.length; p++) {
     const pl = state.players[p];
     for (let i = 0; i < PIECE_COUNT; i++) {
       const step = pl.pieces[i];
-      if (step >= 0 && step < PATH_0.length && positionOf(p, step) === pos) {
+      if (step >= 0 && step < pathFor(p).length && positionOf(p, step) === pos) {
         return { player: p, piece: i };
       }
     }
@@ -94,7 +108,8 @@ function occupant(state, pos) {
   return null;
 }
 
-// After applying a roll, what are the legal moves for the current player?
+// ── Legal moves ─────────────────────────────────────────────────────────────
+
 function legalMoves(state, player, roll) {
   if (state.turn !== player || roll === 0) return [];
   const pl = state.players[player];
@@ -111,11 +126,12 @@ function legalMoves(state, player, roll) {
       const destPos = path[m.dest];
       const occ = occupant(state, destPos);
       if (occ && occ.player === player) return; // blocked by own piece
-      if (occ && occ.player !== player && !SHARED.has(destPos)) return; // can't capture on protected square
+      if (occ && occ.player !== player && !SHARED.has(destPos)) return; // can't capture on safe square
     }
     moves.push(m);
   }
 
+  // Move existing pieces
   for (let i = 0; i < PIECE_COUNT; i++) {
     const curStep = pl.pieces[i];
     if (curStep === -1) continue; // at home
@@ -129,8 +145,7 @@ function legalMoves(state, player, roll) {
     // roll > remaining: cannot move this piece
   }
 
-  // Enter new pieces: step 0 = first position on path
-  // Only if the entry square is not occupied by own piece.
+  // Enter new pieces from home
   const entryPos = path[0];
   const entryOcc = occupant(state, entryPos);
   if (!entryOcc || entryOcc.player !== player) {
@@ -144,13 +159,14 @@ function legalMoves(state, player, roll) {
   return moves;
 }
 
+// ── Apply move ──────────────────────────────────────────────────────────────
+
 function applyMove(state, player, move) {
   if (state.turn !== player) {
     throw new Error('illegal:not_your_turn');
   }
   const pl = state.players[player];
   const piece = move.piece;
-  const curStep = pl.pieces[piece];
   const path = pathFor(player);
 
   if (move.action === 'bearOff') {
@@ -217,8 +233,10 @@ function pushLog(state, key, params) {
   if (state.log.length > 40) state.log.shift();
 }
 
+// ── View for client ─────────────────────────────────────────────────────────
+
 function viewFor(state, playerIndex) {
-  if (!state || !state.players) return null; // safety
+  if (!state || !state.players) return null;
   const you = state.players[playerIndex];
   const actor = currentActor(state);
 
@@ -226,9 +244,10 @@ function viewFor(state, playerIndex) {
   const boardMap = {};
   for (let p = 0; p < state.players.length; p++) {
     const pl = state.players[p];
+    const path = pathFor(p);
     for (let i = 0; i < PIECE_COUNT; i++) {
       const step = pl.pieces[i];
-      if (step >= 0 && step < PATH_0.length) {
+      if (step >= 0 && step < path.length) {
         const pos = positionOf(p, step);
         if (!boardMap[pos]) boardMap[pos] = [];
         boardMap[pos].push({ player: p, piece: i, step });
@@ -244,29 +263,22 @@ function viewFor(state, playerIndex) {
     extraRoll: state.extraRoll,
     actor: actor,
 
-    // Your pieces: array of { step, active } where step is -1 (home) or
-    // PATH.length (off) or the current step index.
     pieces: you ? you.pieces.map((s) => ({ step: s })) : [],
 
-    // Opponent: just counts, not positions
     opponent: state.players[1 - playerIndex]
       ? {
         name: state.players[1 - playerIndex].name,
         isBot: state.players[1 - playerIndex].isBot,
         homeCount: state.players[1 - playerIndex].pieces.filter((s) => s === -1).length,
-        boardCount: state.players[1 - playerIndex].pieces.filter((s) => s >= 0 && s < PATH_0.length).length,
+        boardCount: state.players[1 - playerIndex].pieces.filter((s) => s >= 0 && s < pathFor(1 - playerIndex).length).length,
         offCount: state.players[1 - playerIndex].borneOff || 0,
       }
       : null,
 
-    // Board occupancy (which player's pieces are on each position)
     board: boardMap,
-
     piecesRemaining: you ? PIECE_COUNT - (you.borneOff || 0) : 0,
     winner: state.winner,
     log: state.log.slice(-8),
-
-    // Constants for the client
     path: pathFor(playerIndex),
   };
 }
