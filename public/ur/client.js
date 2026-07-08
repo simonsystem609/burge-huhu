@@ -36,6 +36,7 @@
 
   let lastView = null;
   let legalMoveMap = null;
+  let pendingMove = null; // { destPos, piece } — set on first click, confirmed on second
 
   function showScreen(id) {
     document.querySelectorAll('.screen').forEach(function (s) {
@@ -136,6 +137,74 @@
     return map;
   }
 
+  // ── Move preview arrow ───────────────────
+  function squareCenter(pos) {
+    var sqEl = document.querySelector('.sq[data-pos="' + pos + '"]');
+    if (!sqEl) return null;
+    var r = sqEl.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2, rect: r };
+  }
+
+  function pieceCurrentPos(pieceIdx) {
+    var step = lastView.pieces[pieceIdx].step;
+    if (step < 0) return null; // at home, not yet on board
+    return lastView.path[step];
+  }
+
+  function showMoveArrow(pieceIdx, destPos) {
+    var destCenter = squareCenter(destPos);
+    if (!destCenter) return;
+
+    var curPos = pieceCurrentPos(pieceIdx);
+    var srcCenter, phantom = null;
+    if (curPos === null) {
+      // Entering from home: a phantom piece hovers above the entry square.
+      var offset = Math.max(50, destCenter.rect.height * 0.9);
+      srcCenter = { x: destCenter.x, y: destCenter.y - offset };
+      phantom = srcCenter;
+    } else {
+      srcCenter = squareCenter(curPos);
+      if (!srcCenter) return;
+    }
+
+    var line = $('move-arrow-line');
+    line.setAttribute('x1', srcCenter.x);
+    line.setAttribute('y1', srcCenter.y);
+    line.setAttribute('x2', destCenter.x);
+    line.setAttribute('y2', destCenter.y);
+
+    var phantomEl = $('move-phantom-piece');
+    if (phantom) {
+      phantomEl.style.left = phantom.x + 'px';
+      phantomEl.style.top = phantom.y + 'px';
+      phantomEl.className = 'p' + lastView.you;
+      phantomEl.style.display = 'block';
+    } else {
+      phantomEl.style.display = 'none';
+    }
+
+    $('move-overlay').classList.add('show');
+  }
+
+  function hideMoveArrow() {
+    $('move-overlay').classList.remove('show');
+    $('move-phantom-piece').style.display = 'none';
+  }
+
+  function setPendingMove(destPos, pieceIdx) {
+    pendingMove = { destPos: destPos, piece: pieceIdx };
+    document.querySelectorAll('.sq.move-pending').forEach(function (s) { s.classList.remove('move-pending'); });
+    var destSq = document.querySelector('.sq[data-pos="' + destPos + '"]');
+    if (destSq) destSq.classList.add('move-pending');
+    showMoveArrow(pieceIdx, destPos);
+  }
+
+  function clearPendingMove() {
+    pendingMove = null;
+    document.querySelectorAll('.sq.move-pending').forEach(function (s) { s.classList.remove('move-pending'); });
+    hideMoveArrow();
+  }
+
   // ── Render ──────────────────────────────
   function renderBoard(view) {
     var board = $('board');
@@ -187,8 +256,19 @@
     return dots;
   }
 
+  function renderFinishedTray(containerId, count, playerClass) {
+    var el = $(containerId);
+    el.innerHTML = '';
+    for (var i = 0; i < count; i++) {
+      var tok = document.createElement('span');
+      tok.className = 'finished-token ' + playerClass;
+      el.appendChild(tok);
+    }
+  }
+
   function render(view) {
     lastView = view;
+    clearPendingMove();
 
     if (view.phase === 'move' && view.turn === view.you) {
       legalMoveMap = computeLegalMoves(view);
@@ -202,11 +282,7 @@
     if (view.opponent) {
       $('opp-name').textContent = view.opponent.name + (view.opponent.isBot ? ' (BOT)' : '');
       $('opp-home').textContent = homeDots(view.opponent.homeCount);
-      if (view.opponent.offCount > 0) {
-        $('opp-off').textContent = view.opponent.offCount + ' borne off';
-      } else {
-        $('opp-off').textContent = '';
-      }
+      renderFinishedTray('opp-finished', view.opponent.offCount, 'p' + (1 - view.you));
     }
 
     // Board
@@ -239,7 +315,7 @@
     } else if (view.turn === view.you) {
       var numMoves = legalMoveMap ? Object.keys(legalMoveMap).length : 0;
       if (numMoves > 0) {
-        turnInfo.textContent = 'Click a highlighted square to move ' + view.lastRoll + ' steps.';
+        turnInfo.textContent = 'Click a highlighted square to preview, click again to confirm.';
       } else {
         turnInfo.textContent = 'No legal moves available.';
       }
@@ -247,10 +323,10 @@
       turnInfo.textContent = view.opponent ? 'Waiting for ' + view.opponent.name + '...' : 'Waiting...';
     }
 
-    // My pieces: dots for remaining (not yet borne off) + dots for finished
+    // My pieces: dots for remaining (not yet borne off) + tokens for finished
     var myRemaining = view.piecesRemaining || 0;
     $('my-home').textContent = filledDots(myRemaining);
-    $('my-off').textContent = filledDots(7 - myRemaining);
+    renderFinishedTray('my-finished', 7 - myRemaining, 'p' + view.you);
 
     // Log
     var logList = $('log-list');
@@ -285,21 +361,31 @@
     var piece = legalMoveMap[-1][0];
     socket.emit('move', { piece: piece, destPos: -1 });
     legalMoveMap = null;
+    clearPendingMove();
   };
 
-  // Click on highlighted square → move
+  // First click on a highlighted square previews the move with an arrow;
+  // clicking that same square again confirms it. Clicking elsewhere cancels
+  // the preview (or switches it, if the new square is also a legal dest).
   $('board').addEventListener('click', function (e) {
+    if (!lastView || lastView.turn !== lastView.you || lastView.phase !== 'move' || !legalMoveMap) return;
+
     var sq = e.target.closest('.sq');
-    if (!sq || !lastView) return;
-    if (lastView.turn !== lastView.you || lastView.phase !== 'move') return;
-    var pos = parseInt(sq.getAttribute('data-pos'));
-    if (isNaN(pos) || !legalMoveMap) return;
+    var pos = sq ? parseInt(sq.getAttribute('data-pos')) : NaN;
+    var pieces = !isNaN(pos) ? legalMoveMap[pos] : null;
 
-    var pieces = legalMoveMap[pos];
-    if (!pieces || pieces.length === 0) return;
+    if (!pieces || pieces.length === 0) {
+      clearPendingMove();
+      return;
+    }
 
-    socket.emit('move', { piece: pieces[0], destPos: pos });
-    legalMoveMap = null;
+    if (pendingMove && pendingMove.destPos === pos) {
+      socket.emit('move', { piece: pendingMove.piece, destPos: pos });
+      legalMoveMap = null;
+      clearPendingMove();
+    } else {
+      setPendingMove(pos, pieces[0]);
+    }
   });
 
   // ── Lobby ────────────────────────────────

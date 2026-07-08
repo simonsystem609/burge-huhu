@@ -72,7 +72,7 @@
           <div class="opp-name" id="opp-name">Bot</div>
           <div class="opp-pieces">
             <span id="opp-home">&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;</span>
-            <span id="opp-off" class="off-count"></span>
+            <div id="opp-finished" class="finished-tray"></div>
           </div>
         </div>
 
@@ -91,7 +91,7 @@
         <div class="my-panel">
           <div class="my-pieces">
             <span id="my-home"></span>
-            <span id="my-off" class="off-count"></span>
+            <div id="my-finished" class="finished-tray"></div>
           </div>
         </div>
       </div>
@@ -114,6 +114,18 @@
   </div>
 
   <div id="toast" class="toast"></div>
+
+  <div id="move-overlay">
+    <svg width="100%" height="100%">
+      <defs>
+        <marker id="move-arrowhead" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+          <polygon points="0,0 10,5 0,10" />
+        </marker>
+      </defs>
+      <line id="move-arrow-line" marker-end="url(#move-arrowhead)" />
+    </svg>
+    <div id="move-phantom-piece"></div>
+  </div>
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="client.js"></script>
