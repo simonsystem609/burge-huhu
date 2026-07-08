@@ -145,13 +145,14 @@ function legalMoves(state, player, roll) {
     // roll > remaining: cannot move this piece
   }
 
-  // Enter new pieces from home
-  const entryPos = path[0];
+  // Enter new pieces from home — a roll of N lands on step N-1
+  const entryStep = roll - 1;
+  const entryPos = path[entryStep];
   const entryOcc = occupant(state, entryPos);
   if (!entryOcc || entryOcc.player !== player) {
     for (let i = 0; i < PIECE_COUNT; i++) {
       if (pl.pieces[i] === -1) {
-        addMove({ piece: i, action: 'move', dest: 0 });
+        addMove({ piece: i, action: 'move', dest: entryStep });
       }
     }
   }

@@ -61,8 +61,8 @@ function chooseMove(state, player) {
   );
   if (rosette.length > 0) return rosette[0];
 
-  // 4. Enter new piece (dest === 0)
-  const enter = moves.find((m) => m.action === 'move' && m.dest === 0);
+  // 4. Enter new piece (entry always lands on step roll-1)
+  const enter = moves.find((m) => m.action === 'move' && m.dest === roll - 1);
   if (enter) return enter;
 
   // 5. Move furthest-behind piece forward

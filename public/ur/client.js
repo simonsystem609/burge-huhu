@@ -103,7 +103,7 @@
 
       if (curStep === -1) {
         if (roll === 0) continue;
-        var entryPos = path[0];
+        var entryPos = path[roll - 1];
         var blocked = false;
         if (view.board && view.board[entryPos]) {
           for (var k = 0; k < view.board[entryPos].length; k++) {
@@ -181,6 +181,12 @@
     return dots;
   }
 
+  function filledDots(n) {
+    var dots = '';
+    for (var i = 0; i < n; i++) dots += '\u25CF';
+    return dots;
+  }
+
   function render(view) {
     lastView = view;
 
@@ -241,8 +247,10 @@
       turnInfo.textContent = view.opponent ? 'Waiting for ' + view.opponent.name + '...' : 'Waiting...';
     }
 
-    // My pieces remaining
-    $('my-remaining').textContent = view.piecesRemaining || 0;
+    // My pieces: dots for remaining (not yet borne off) + dots for finished
+    var myRemaining = view.piecesRemaining || 0;
+    $('my-home').textContent = filledDots(myRemaining);
+    $('my-off').textContent = filledDots(7 - myRemaining);
 
     // Log
     var logList = $('log-list');
