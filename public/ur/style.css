@@ -79,8 +79,9 @@ input:focus, select:focus { outline: 2px solid #d4a060; }
 /* ── Board ────────────────────────────────── */
 .board {
   position: relative;
-  width: 100%;
-  max-width: 400px;
+  height: min(calc(100vh - 260px), 900px);
+  width: auto;
+  max-width: 100%;
   aspect-ratio: 521 / 1299;
   background: url('board-source.png') no-repeat center center;
   background-size: 100% 100%;
