@@ -4,42 +4,37 @@
 
   const socket = io('/ur', { reconnection: true, reconnectionDelay: 800, reconnectionDelayMax: 4000 });
 
-  // Board layout (matches engine):
-  //   Left block (3x4):       Bridge:       Right block (3x2):
-  //   [ 0][ 1][ 2][ 3]         .  .         [14][15]
-  //   [ 4][ 5][ 6][ 7]       [12][13]       [16][17]
-  //   [ 8][ 9][10][11]         .  .         [18][19]
+  // 3-column × 8-row vertical board layout (matching board-source.png).
+  // Each entry has left/top/width/height as % of the .board container.
   const POSITIONS = [
-    { id: 0,  col: 1, row: 1 },
-    { id: 1,  col: 2, row: 1 },
-    { id: 2,  col: 3, row: 1 },
-    { id: 3,  col: 4, row: 1 },
-    { id: 4,  col: 1, row: 2 },
-    { id: 5,  col: 2, row: 2 },
-    { id: 6,  col: 3, row: 2 },
-    { id: 7,  col: 4, row: 2 },
-    { id: 8,  col: 1, row: 3 },
-    { id: 9,  col: 2, row: 3 },
-    { id: 10, col: 3, row: 3 },
-    { id: 11, col: 4, row: 3 },
-    { id: 12, col: 5, row: 2 },
-    { id: 13, col: 6, row: 2 },
-    { id: 14, col: 7, row: 1 },
-    { id: 15, col: 8, row: 1 },
-    { id: 16, col: 7, row: 2 },
-    { id: 17, col: 8, row: 2 },
-    { id: 18, col: 7, row: 3 },
-    { id: 19, col: 8, row: 3 },
+    { id: 0,  left:  1.73, top: 50.69, w: 32.15, h: 12.24 },
+    { id: 1,  left:  1.73, top: 62.93, w: 32.15, h: 12.16 },
+    { id: 2,  left:  1.73, top: 75.10, w: 32.15, h: 11.70 },
+    { id: 3,  left:  1.73, top: 86.80, w: 32.15, h: 12.51 },
+    { id: 4,  left: 33.88, top: 50.69, w: 32.63, h: 12.24 },
+    { id: 5,  left: 33.88, top: 62.93, w: 32.63, h: 12.16 },
+    { id: 6,  left: 33.88, top: 75.10, w: 32.63, h: 11.70 },
+    { id: 7,  left: 33.88, top: 86.80, w: 32.63, h: 12.51 },
+    { id: 8,  left: 66.51, top: 50.69, w: 32.15, h: 12.24 },
+    { id: 9,  left: 66.51, top: 62.93, w: 32.15, h: 12.16 },
+    { id: 10, left: 66.51, top: 75.10, w: 32.15, h: 11.70 },
+    { id: 11, left: 66.51, top: 86.80, w: 32.15, h: 12.51 },
+    { id: 12, left: 33.88, top: 38.18, w: 32.63, h: 12.51 },
+    { id: 13, left: 33.88, top: 25.60, w: 32.63, h: 12.59 },
+    { id: 14, left:  1.73, top: 13.20, w: 32.15, h: 12.39 },
+    { id: 15, left:  1.73, top:  0.58, w: 32.15, h: 12.63 },
+    { id: 16, left: 33.88, top:  0.58, w: 32.63, h: 12.63 },
+    { id: 17, left: 33.88, top: 13.20, w: 32.63, h: 12.39 },
+    { id: 18, left: 66.51, top: 13.20, w: 32.15, h: 12.39 },
+    { id: 19, left: 66.51, top:  0.58, w: 32.15, h: 12.63 },
   ];
 
   const SHARED = new Set([4, 5, 6, 7, 12, 13, 16, 17]);
-  const ROSETTES = new Set([0, 4, 8, 14, 18]);
+  const ROSETTES = new Set([0, 8, 15, 19]);
 
   const $ = function (id) { return document.getElementById(id); };
 
   let lastView = null;
-
-  // Map of destPos -> piece index for legal moves
   let legalMoveMap = null;
 
   function showScreen(id) {
@@ -96,7 +91,6 @@
   };
 
   // ── Legal move computation ──────────────
-  // Builds a map: destPos -> [pieceIdx, ...]
   function computeLegalMoves(view) {
     var map = {};
     if (!view.path || view.lastRoll == null) return map;
@@ -108,7 +102,6 @@
       var destPos = null;
 
       if (curStep === -1) {
-        // Piece at home: can enter if roll > 0 and entry not blocked
         if (roll === 0) continue;
         var entryPos = path[0];
         var blocked = false;
@@ -119,15 +112,12 @@
         }
         if (!blocked) destPos = entryPos;
       } else {
-        // Piece on board
         var remaining = path.length - curStep;
         if (roll === remaining) {
-          // Bear off: use -1 as sentinel
           destPos = -1;
         } else if (roll < remaining) {
           var destStep = curStep + roll;
           var dp = path[destStep];
-          // Check not blocked by own piece
           var blocked2 = false;
           if (view.board && view.board[dp]) {
             for (var j = 0; j < view.board[dp].length; j++) {
@@ -162,17 +152,12 @@
       var isLegal = legalMoveMap && legalMoveMap[p.id] && legalMoveMap[p.id].length > 0;
       if (isLegal) sq.classList.add('legal-dest');
 
-      sq.style.gridColumn = String(p.col);
-      sq.style.gridRow = String(p.row);
+      // Percentage-based absolute positioning
+      sq.style.left = p.left + '%';
+      sq.style.top = p.top + '%';
+      sq.style.width = p.w + '%';
+      sq.style.height = p.h + '%';
       sq.setAttribute('data-pos', p.id);
-
-      // Rosette star
-      if (ROSETTES.has(p.id)) {
-        var star = document.createElement('span');
-        star.className = 'rosette-star';
-        star.textContent = '\u2605';
-        sq.appendChild(star);
-      }
 
       // Pieces
       if (view.board && view.board[p.id]) {
@@ -199,7 +184,6 @@
   function render(view) {
     lastView = view;
 
-    // Compute legal moves in move phase
     if (view.phase === 'move' && view.turn === view.you) {
       legalMoveMap = computeLegalMoves(view);
     } else {
@@ -288,16 +272,14 @@
     socket.emit('roll');
   };
 
-  // Bear off button
   $('btn-bear-off').onclick = function () {
     if (!legalMoveMap || !legalMoveMap[-1] || legalMoveMap[-1].length === 0) return;
-    // Bear off the first piece that can bear off
     var piece = legalMoveMap[-1][0];
     socket.emit('move', { piece: piece, destPos: -1 });
     legalMoveMap = null;
   };
 
-  // Click on board square → move if it's a legal destination
+  // Click on highlighted square → move
   $('board').addEventListener('click', function (e) {
     var sq = e.target.closest('.sq');
     if (!sq || !lastView) return;
@@ -308,7 +290,6 @@
     var pieces = legalMoveMap[pos];
     if (!pieces || pieces.length === 0) return;
 
-    // Move the first matching piece
     socket.emit('move', { piece: pieces[0], destPos: pos });
     legalMoveMap = null;
   });

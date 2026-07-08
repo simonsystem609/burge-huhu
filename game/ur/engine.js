@@ -41,7 +41,7 @@ const SHARED = new Set([4, 5, 6, 7, 12, 13, 16, 17]);
 
 // Rosette squares — landing here gives an extra roll AND is safe from capture.
 // Two on left block edges (entry squares), one in middle-left, two on right side.
-const ROSETTES = new Set([0, 4, 8, 14, 18]);
+const ROSETTES = new Set([0, 8, 15, 19]);
 
 const PIECE_COUNT = 7;
 
@@ -126,7 +126,7 @@ function legalMoves(state, player, roll) {
       const destPos = path[m.dest];
       const occ = occupant(state, destPos);
       if (occ && occ.player === player) return; // blocked by own piece
-      if (occ && occ.player !== player && !SHARED.has(destPos)) return; // can't capture on safe square
+      if (occ && occ.player !== player && (!SHARED.has(destPos) || ROSETTES.has(destPos))) return; // can't capture on safe or rosette square
     }
     moves.push(m);
   }

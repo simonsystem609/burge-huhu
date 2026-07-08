@@ -78,55 +78,28 @@ input:focus, select:focus { outline: 2px solid #d4a060; }
 
 /* ── Board ────────────────────────────────── */
 .board {
-  display: grid;
-  grid-template-columns: repeat(8, 56px);
-  grid-template-rows: repeat(3, 56px);
-  gap: 3px;
-  justify-content: center;
-  background: #5a3a20;
-  padding: 6px;
+  position: relative;
+  width: 100%;
+  max-width: 400px;
+  aspect-ratio: 521 / 1299;
+  background: url('board-source.png') no-repeat center center;
+  background-size: 100% 100%;
   border-radius: 8px;
   border: 3px solid #8a5a30;
   box-shadow: 0 4px 20px rgba(0,0,0,0.5);
 }
 
 .sq {
-  width: 56px; height: 56px;
-  border-radius: 4px;
+  position: absolute;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer; user-select: none;
-  position: relative;
   transition: all 0.15s;
-}
-
-/* Tile types */
-.sq.safe {
-  background: #f5f0e8;
-  border: 2px solid #c8b898;
-}
-.sq.shared {
-  background: #e8e0d0;
-  border: 2px solid #b8a888;
-}
-.sq.rosette {
-  background: #fff8f0;
-  border: 2px solid #d4a060;
-  box-shadow: inset 0 0 8px rgba(212,160,96,0.3);
-}
-
-/* Rosette star */
-.rosette-star {
-  font-size: 1.4rem;
-  color: #c0392b;
-  position: absolute;
-  top: 50%; left: 50%;
-  transform: translate(-50%, -50%);
-  opacity: 0.25;
-  pointer-events: none;
+  background: transparent;
+  border: none;
 }
 
 /* Hover and selection */
-.sq:hover { filter: brightness(1.05); transform: scale(1.03); z-index: 2; }
+.sq:hover { filter: brightness(1.08); transform: scale(1.03); z-index: 2; }
 .sq.selectable {
   border: 3px solid #2ecc71;
   box-shadow: 0 0 10px rgba(46,204,113,0.5);
