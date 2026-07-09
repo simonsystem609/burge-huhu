@@ -35,8 +35,10 @@
   const $ = function (id) { return document.getElementById(id); };
 
   let lastView = null;
-  let legalMoveMap = null;
-  let pendingMove = null; // { destPos, piece } — set on first click, confirmed on second
+  let legalMoveMap = null;   // destPos -> [pieceIdx] (includes -1 for bear-off)
+  let sourceMoveMap = null;  // srcPos -> { piece, destPos } for my on-board pieces
+  let entryMove = null;      // { piece, destPos } if a home piece can enter
+  let pendingMove = null;    // { destPos, piece, srcPos } — set on first click, confirmed on second
 
   function showScreen(id) {
     document.querySelectorAll('.screen').forEach(function (s) {
@@ -137,6 +139,26 @@
     return map;
   }
 
+  // Piece-centric view of the same moves: which of my on-board pieces can
+  // move (srcPos -> move), and whether a new piece can enter from home.
+  function computeSourceMoves(view) {
+    sourceMoveMap = {};
+    entryMove = null;
+    if (!view.path || view.lastRoll == null) return;
+    var path = view.path;
+    for (var pos in legalMoveMap) {
+      legalMoveMap[pos].forEach(function (pieceIdx) {
+        var step = view.pieces[pieceIdx].step;
+        var destPos = parseInt(pos, 10);
+        if (step === -1) {
+          if (!entryMove) entryMove = { piece: pieceIdx, destPos: destPos };
+        } else {
+          sourceMoveMap[path[step]] = { piece: pieceIdx, destPos: destPos };
+        }
+      });
+    }
+  }
+
   // ── Move preview arrow ───────────────────
   function squareCenter(pos) {
     var sqEl = document.querySelector('.sq[data-pos="' + pos + '"]');
@@ -167,20 +189,28 @@
   }
 
   function showMoveArrow(pieceIdx, destPos) {
-    var destCenter = squareCenter(destPos);
-    if (!destCenter) return;
-
     var curPos = pieceCurrentPos(pieceIdx);
-    var srcCenter, phantom = null;
-    if (curPos === null) {
-      // Entering from home: a piece token sits in the margin beside the
-      // board, level with the entry square — a "prep square" just outside
-      // the board proper.
-      srcCenter = marginPoint(destCenter.rect);
-      phantom = srcCenter;
-    } else {
+    var srcCenter, destCenter, phantom = null;
+
+    if (destPos === -1) {
+      // Bearing off: arrow from the piece's square out to the finish spot
+      // in the margin beside the board.
       srcCenter = squareCenter(curPos);
       if (!srcCenter) return;
+      destCenter = marginPoint(srcCenter.rect);
+    } else {
+      destCenter = squareCenter(destPos);
+      if (!destCenter) return;
+      if (curPos === null) {
+        // Entering from home: a piece token sits in the margin beside the
+        // board, level with the entry square — a "prep square" just outside
+        // the board proper.
+        srcCenter = marginPoint(destCenter.rect);
+        phantom = srcCenter;
+      } else {
+        srcCenter = squareCenter(curPos);
+        if (!srcCenter) return;
+      }
     }
 
     var line = $('move-arrow-line');
@@ -242,11 +272,80 @@
     setTimeout(function () { tok.remove(); }, 700);
   }
 
+  // ── Dice roll animation ──────────────────
+  // 4 tetrahedral dice, top view: each die shows a white pip when its marked
+  // tip lands up; the roll is how many pips show. The dice tumble in the
+  // side margin — right of the board for player 0 (whose lane is the right
+  // column), left for player 1 — then settle on an arrangement matching the
+  // actual roll.
+  var diceTimers = [];
+
+  function playDiceAnimation(player, roll) {
+    var wrap = $('dice-anim');
+    var board = $('board');
+    if (!wrap || !board || !document.getElementById('screen-game').classList.contains('active')) return;
+
+    diceTimers.forEach(clearTimeout);
+    diceTimers = [];
+
+    var boardRect = board.getBoundingClientRect();
+    var tableRect = document.querySelector('.table-ur').getBoundingClientRect();
+    var x = player === 0
+      ? (boardRect.right + tableRect.right) / 2
+      : (tableRect.left + boardRect.left) / 2;
+    wrap.style.left = x + 'px';
+    wrap.style.top = (boardRect.top + boardRect.height / 2) + 'px';
+
+    var dice = wrap.querySelectorAll('.die');
+    $('dice-total').textContent = '';
+    wrap.classList.remove('settled');
+    wrap.classList.add('show');
+
+    // Tumble phase: randomize rotations and pips every 90ms
+    var elapsed = 0;
+    function tumble() {
+      dice.forEach(function (d) {
+        d.style.transform = 'rotate(' + Math.floor(Math.random() * 360) + 'deg)';
+        d.classList.toggle('marked', Math.random() < 0.5);
+      });
+      elapsed += 90;
+      if (elapsed < 900) {
+        diceTimers.push(setTimeout(tumble, 90));
+      } else {
+        settle();
+      }
+    }
+
+    function settle() {
+      // Random arrangement with exactly `roll` marked dice
+      var idx = [0, 1, 2, 3];
+      for (var i = idx.length - 1; i > 0; i--) {
+        var j = Math.floor(Math.random() * (i + 1));
+        var t = idx[i]; idx[i] = idx[j]; idx[j] = t;
+      }
+      var marked = new Set(idx.slice(0, roll));
+      dice.forEach(function (d, i) {
+        d.style.transform = 'rotate(' + (Math.floor(Math.random() * 30) - 15) + 'deg)';
+        d.classList.toggle('marked', marked.has(i));
+      });
+      $('dice-total').textContent = String(roll);
+      wrap.classList.add('settled');
+      diceTimers.push(setTimeout(function () {
+        wrap.classList.remove('show', 'settled');
+      }, 1600));
+    }
+
+    tumble();
+  }
+
   function setPendingMove(destPos, pieceIdx) {
-    pendingMove = { destPos: destPos, piece: pieceIdx };
+    // The square whose click confirms the move: the destination square for a
+    // normal move, or the piece's own square for a bear-off (no dest square).
+    var confirmPos = destPos === -1 ? pieceCurrentPos(pieceIdx) : destPos;
+    pendingMove = { destPos: destPos, piece: pieceIdx, confirmPos: confirmPos };
     document.querySelectorAll('.sq.move-pending').forEach(function (s) { s.classList.remove('move-pending'); });
-    var destSq = document.querySelector('.sq[data-pos="' + destPos + '"]');
-    if (destSq) destSq.classList.add('move-pending');
+    var confirmSq = document.querySelector('.sq[data-pos="' + confirmPos + '"]');
+    if (confirmSq) confirmSq.classList.add('move-pending');
     showMoveArrow(pieceIdx, destPos);
   }
 
@@ -268,9 +367,10 @@
       else if (SHARED.has(p.id)) sq.classList.add('shared');
       else sq.classList.add('safe');
 
-      // Highlight if legal destination
-      var isLegal = legalMoveMap && legalMoveMap[p.id] && legalMoveMap[p.id].length > 0;
-      if (isLegal) sq.classList.add('legal-dest');
+      // Only the entry square for a NEW piece is highlighted up front;
+      // destinations for pieces already on the board appear when the
+      // player clicks one of their pieces.
+      if (entryMove && entryMove.destPos === p.id) sq.classList.add('legal-dest');
 
       // Percentage-based absolute positioning
       sq.style.left = p.left + '%';
@@ -336,8 +436,11 @@
 
     if (view.phase === 'move' && view.turn === view.you) {
       legalMoveMap = computeLegalMoves(view);
+      computeSourceMoves(view);
     } else {
       legalMoveMap = null;
+      sourceMoveMap = null;
+      entryMove = null;
     }
 
     showScreen('screen-game');
@@ -379,7 +482,9 @@
     } else if (view.turn === view.you) {
       var numMoves = legalMoveMap ? Object.keys(legalMoveMap).length : 0;
       if (numMoves > 0) {
-        turnInfo.textContent = 'Click a highlighted square to preview, click again to confirm.';
+        turnInfo.textContent = entryMove
+          ? 'Click a piece (or the highlighted entry square) to preview a move, click the highlight to confirm.'
+          : 'Click one of your pieces to preview its move, then click the highlight to confirm.';
       } else {
         turnInfo.textContent = 'No legal moves available.';
       }
@@ -428,28 +533,39 @@
     clearPendingMove();
   };
 
-  // First click on a highlighted square previews the move with an arrow;
-  // clicking that same square again confirms it. Clicking elsewhere cancels
-  // the preview (or switches it, if the new square is also a legal dest).
+  // Piece-first interaction: click one of your pieces (or the pre-highlighted
+  // entry square) to preview its move — arrow plus a highlight on where it
+  // will land. Clicking that highlight confirms; clicking another of your
+  // pieces switches the preview; clicking anywhere else cancels it.
   $('board').addEventListener('click', function (e) {
     if (!lastView || lastView.turn !== lastView.you || lastView.phase !== 'move' || !legalMoveMap) return;
 
     var sq = e.target.closest('.sq');
     var pos = sq ? parseInt(sq.getAttribute('data-pos')) : NaN;
-    var pieces = !isNaN(pos) ? legalMoveMap[pos] : null;
+    if (isNaN(pos)) { clearPendingMove(); return; }
 
-    if (!pieces || pieces.length === 0) {
+    // Confirm: click on the pending highlight (dest square, or the piece's
+    // own square for a bear-off).
+    if (pendingMove && pendingMove.confirmPos === pos) {
+      socket.emit('move', { piece: pendingMove.piece, destPos: pendingMove.destPos });
+      legalMoveMap = null;
       clearPendingMove();
       return;
     }
 
-    if (pendingMove && pendingMove.destPos === pos) {
-      socket.emit('move', { piece: pendingMove.piece, destPos: pos });
-      legalMoveMap = null;
-      clearPendingMove();
-    } else {
-      setPendingMove(pos, pieces[0]);
+    // Preview: click one of my movable pieces.
+    if (sourceMoveMap && sourceMoveMap[pos]) {
+      setPendingMove(sourceMoveMap[pos].destPos, sourceMoveMap[pos].piece);
+      return;
     }
+
+    // Preview: click the highlighted entry square for a new piece.
+    if (entryMove && entryMove.destPos === pos) {
+      setPendingMove(entryMove.destPos, entryMove.piece);
+      return;
+    }
+
+    clearPendingMove();
   });
 
   // ── Lobby ────────────────────────────────
@@ -478,6 +594,9 @@
   socket.on('lobby', renderLobby);
   socket.on('game', function (data) {
     render(data.view);
+  });
+  socket.on('rolled', function (data) {
+    playDiceAnimation(data.player, data.roll);
   });
   socket.on('errorMsg', function (msg) { toast(msg); });
   socket.on('leftRoom', function () { showScreen('screen-menu'); });

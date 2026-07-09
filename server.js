@@ -254,6 +254,17 @@ function urEmitGame(room) {
   }
 }
 
+function urEmitRoll(room, player, roll) {
+  for (const seat of room.seats) {
+    if (seat.socketId) {
+      const s = urIo.sockets.get(seat.socketId);
+      if (s) {
+        try { s.emit('rolled', { player, roll }); } catch (e) { /* skip */ }
+      }
+    }
+  }
+}
+
 function urEmitLobby(room) {
   const payload = {
     code: room.code,
@@ -291,6 +302,7 @@ function urDriveBots(code) {
 
     if (r.game.phase === 'roll') {
       r.game.lastRoll = urEngine.rollDice(Math.random);
+      urEmitRoll(r, a.player, r.game.lastRoll);
       const moves = urEngine.legalMoves(r.game, a.player, r.game.lastRoll);
       if (moves.length === 0) {
         r.game.turn = 1 - r.game.turn;
@@ -391,6 +403,7 @@ urIo.on('connection', (socket) => {
     if (si === -1 || room.game.turn !== si || room.game.phase !== 'roll') return;
 
     room.game.lastRoll = urEngine.rollDice(Math.random);
+    urEmitRoll(room, si, room.game.lastRoll);
     const moves = urEngine.legalMoves(room.game, si, room.game.lastRoll);
     if (moves.length === 0) {
       room.game.turn = 1 - room.game.turn;

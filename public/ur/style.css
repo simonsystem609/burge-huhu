@@ -129,7 +129,7 @@ input:focus, select:focus { outline: 2px solid #d4a060; }
   box-shadow: 0 0 20px rgba(243,156,18,0.8), inset 0 0 12px rgba(243,156,18,0.3);
   transform: scale(1.05);
 }
-.sq.legal-dest.move-pending {
+.sq.move-pending {
   border: 4px solid #2ecc71;
   box-shadow: 0 0 16px rgba(46,204,113,0.8), inset 0 0 10px rgba(46,204,113,0.3);
   animation: none;
@@ -234,6 +234,30 @@ input:focus, select:focus { outline: 2px solid #d4a060; }
 #move-phantom-piece.p0::after { background: #7a1c17; }
 #move-phantom-piece.p1 { background: #2f6fd4; border: 3px solid #163a70; }
 #move-phantom-piece.p1::after { background: #163a70; }
+
+/* ── Dice roll animation ─────────────────── */
+#dice-anim {
+  position: fixed; z-index: 54; display: none;
+  flex-direction: column; align-items: center; gap: 6px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+#dice-anim.show { display: flex; }
+.dice-row { display: grid; grid-template-columns: repeat(2, 44px); gap: 8px; }
+.die { width: 44px; height: 44px; transition: transform 0.08s linear; }
+.die svg { width: 100%; height: 100%; overflow: visible; }
+.die polygon {
+  fill: #1a1410; stroke: #d4a060; stroke-width: 2; stroke-linejoin: round;
+}
+.die line { stroke: #8a5a30; stroke-width: 1.2; }
+.die .pip { fill: #f5f0e8; opacity: 0; }
+.die.marked .pip { opacity: 1; }
+.dice-total {
+  font-weight: 800; font-size: 1.5rem; color: #d4a060;
+  text-shadow: 0 0 8px rgba(212,160,96,0.4);
+  min-height: 1.2em; opacity: 0; transition: opacity 0.2s;
+}
+#dice-anim.settled .dice-total { opacity: 1; }
 
 .bearoff-token {
   position: fixed; width: 36px; height: 36px; border-radius: 50%;
