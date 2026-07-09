@@ -151,6 +151,21 @@
     return lastView.path[step];
   }
 
+  // A point in the empty margin beside the board, level with a given square —
+  // used as the "prep" spot for pieces entering and the "finish" spot for
+  // pieces bearing off, whichever side (left/right) that square is nearer to.
+  function marginPoint(squareRect) {
+    var boardRect = $('board').getBoundingClientRect();
+    var tableRect = document.querySelector('.table-ur').getBoundingClientRect();
+    var cx = squareRect.left + squareRect.width / 2;
+    var cy = squareRect.top + squareRect.height / 2;
+    var isLeft = (cx - boardRect.left) < (boardRect.right - cx);
+    var margin = isLeft ? (boardRect.left - tableRect.left) : (tableRect.right - boardRect.right);
+    var offset = Math.max(30, Math.min(squareRect.width * 0.9, margin * 0.6, 90));
+    var x = isLeft ? (boardRect.left - offset) : (boardRect.right + offset);
+    return { x: x, y: cy };
+  }
+
   function showMoveArrow(pieceIdx, destPos) {
     var destCenter = squareCenter(destPos);
     if (!destCenter) return;
@@ -158,9 +173,10 @@
     var curPos = pieceCurrentPos(pieceIdx);
     var srcCenter, phantom = null;
     if (curPos === null) {
-      // Entering from home: a phantom blob hovers above the entry square,
-      // its tail tip (= the arrow's start point) touching down near it.
-      srcCenter = { x: destCenter.x, y: destCenter.y - destCenter.rect.height * 0.4 };
+      // Entering from home: a piece token sits in the margin beside the
+      // board, level with the entry square — a "prep square" just outside
+      // the board proper.
+      srcCenter = marginPoint(destCenter.rect);
       phantom = srcCenter;
     } else {
       srcCenter = squareCenter(curPos);
@@ -175,9 +191,8 @@
 
     var phantomEl = $('move-phantom-piece');
     if (phantom) {
-      // The SVG's viewBox tail-tip sits at local (30, 110); anchor that point at `phantom`.
-      phantomEl.style.left = (phantom.x - 30) + 'px';
-      phantomEl.style.top = (phantom.y - 110) + 'px';
+      phantomEl.style.left = phantom.x + 'px';
+      phantomEl.style.top = phantom.y + 'px';
       phantomEl.setAttribute('class', 'p' + lastView.you);
       phantomEl.style.display = 'block';
     } else {
@@ -190,6 +205,41 @@
   function hideMoveArrow() {
     $('move-overlay').classList.remove('show');
     $('move-phantom-piece').style.display = 'none';
+  }
+
+  function findBoardPos(view, player, piece) {
+    if (!view || !view.board) return null;
+    for (var pos in view.board) {
+      var occs = view.board[pos];
+      for (var i = 0; i < occs.length; i++) {
+        if (occs[i].player === player && occs[i].piece === piece) return parseInt(pos, 10);
+      }
+    }
+    return null;
+  }
+
+  // A piece that just bore off steps from its last square into the margin
+  // beside the board — a "finish square" just outside the board proper.
+  function animateBearOff(player, fromPos) {
+    var sqEl = document.querySelector('.sq[data-pos="' + fromPos + '"]');
+    if (!sqEl) return;
+    var r = sqEl.getBoundingClientRect();
+    var target = marginPoint(r);
+
+    var tok = document.createElement('div');
+    tok.className = 'bearoff-token p' + player;
+    tok.style.left = (r.left + r.width / 2) + 'px';
+    tok.style.top = (r.top + r.height / 2) + 'px';
+    document.body.appendChild(tok);
+
+    requestAnimationFrame(function () {
+      tok.style.left = target.x + 'px';
+      tok.style.top = target.y + 'px';
+      tok.style.opacity = '0';
+      tok.style.transform = 'translate(-50%, -50%) scale(0.5)';
+    });
+
+    setTimeout(function () { tok.remove(); }, 700);
   }
 
   function setPendingMove(destPos, pieceIdx) {
@@ -268,8 +318,21 @@
   }
 
   function render(view) {
+    var prevView = lastView;
     lastView = view;
     clearPendingMove();
+
+    // Detect pieces that just bore off (while their old square is still in
+    // the DOM) and animate them stepping off into the finish margin.
+    if (prevView && view.log) {
+      var prevMaxT = (prevView.log && prevView.log.length) ? prevView.log[prevView.log.length - 1].t : 0;
+      view.log.forEach(function (entry) {
+        if (entry.t > prevMaxT && entry.key === 'bearOff') {
+          var fromPos = findBoardPos(prevView, entry.params.player, entry.params.piece);
+          if (fromPos !== null) animateBearOff(entry.params.player, fromPos);
+        }
+      });
+    }
 
     if (view.phase === 'move' && view.turn === view.you) {
       legalMoveMap = computeLegalMoves(view);
