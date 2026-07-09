@@ -30,7 +30,9 @@
   ];
 
   const SHARED = new Set([4, 5, 6, 7, 12, 13, 16, 17]);
-  const ROSETTES = new Set([0, 8, 15, 19]);
+  // Rosettes per Finkel / the British Museum board: path steps 4, 8 and 14.
+  // Kept in sync with the server (the game view carries the active set).
+  var ROSETTES = new Set([3, 4, 11, 14, 18]);
 
   const $ = function (id) { return document.getElementById(id); };
 
@@ -63,12 +65,16 @@
     return Number($('bot-speed').value) || 700;
   }
 
+  function gameMode() {
+    return $('mode-select').value || 'finkel';
+  }
+
   // ── Menu ────────────────────────────────
   $('btn-single').onclick = function () {
-    socket.emit('singleplayer', { name: myName(), botDelayMs: botDelay() });
+    socket.emit('singleplayer', { name: myName(), botDelayMs: botDelay(), mode: gameMode() });
   };
   $('btn-create').onclick = function () {
-    socket.emit('createRoom', { name: myName(), botDelayMs: botDelay() });
+    socket.emit('createRoom', { name: myName(), botDelayMs: botDelay(), mode: gameMode() });
   };
   $('btn-join').onclick = function () {
     var code = ($('code-input').value || '').trim().toUpperCase();
@@ -97,6 +103,19 @@
   };
 
   // ── Legal move computation ──────────────
+  // Mirrors the engine: a square is landable unless it holds one of my own
+  // pieces, or an opponent piece that cannot be captured (outside the shared
+  // lane, or on a rosette in modes where rosettes are safe).
+  function canLand(view, pos) {
+    var occ = view.board && view.board[pos];
+    if (!occ || occ.length === 0) return true;
+    var other = occ[0];
+    if (other.player === view.you) return false;
+    if (!SHARED.has(pos)) return false;
+    if (view.rosettesSafe && ROSETTES.has(pos)) return false;
+    return true;
+  }
+
   function computeLegalMoves(view) {
     var map = {};
     if (!view.path || view.lastRoll == null) return map;
@@ -110,27 +129,14 @@
       if (curStep === -1) {
         if (roll === 0) continue;
         var entryPos = path[roll - 1];
-        var blocked = false;
-        if (view.board && view.board[entryPos]) {
-          for (var k = 0; k < view.board[entryPos].length; k++) {
-            if (view.board[entryPos][k].player === view.you) { blocked = true; break; }
-          }
-        }
-        if (!blocked) destPos = entryPos;
+        if (canLand(view, entryPos)) destPos = entryPos;
       } else {
         var remaining = path.length - curStep;
         if (roll === remaining) {
           destPos = -1;
         } else if (roll < remaining) {
-          var destStep = curStep + roll;
-          var dp = path[destStep];
-          var blocked2 = false;
-          if (view.board && view.board[dp]) {
-            for (var j = 0; j < view.board[dp].length; j++) {
-              if (view.board[dp][j].player === view.you) { blocked2 = true; break; }
-            }
-          }
-          if (!blocked2) destPos = dp;
+          var dp = path[curStep + roll];
+          if (canLand(view, dp)) destPos = dp;
         }
       }
 
@@ -299,7 +305,17 @@
     wrap.style.left = x + 'px';
     wrap.style.top = (boardRect.top + boardRect.height / 2) + 'px';
 
-    var dice = wrap.querySelectorAll('.die');
+    // Mode-aware: Masters throws 3 dice and a zero counts as 4 (shown as
+    // three unmarked dice); Finkel/Blitz throw 4.
+    var diceCount = (lastView && lastView.diceCount) || 4;
+    var zeroAs4 = !!(lastView && lastView.zeroAs4);
+    var marks = zeroAs4 && roll === 4 ? 0 : Math.min(roll, diceCount);
+
+    var dice = Array.prototype.slice.call(wrap.querySelectorAll('.die'), 0, 4);
+    dice.forEach(function (d, i) {
+      d.style.display = i < diceCount ? '' : 'none';
+    });
+    var live = dice.slice(0, diceCount);
     $('dice-total').textContent = '';
     wrap.classList.remove('settled');
     wrap.classList.add('show');
@@ -307,7 +323,7 @@
     // Tumble phase: randomize rotations and pips every 90ms
     var elapsed = 0;
     function tumble() {
-      dice.forEach(function (d) {
+      live.forEach(function (d) {
         d.style.transform = 'rotate(' + Math.floor(Math.random() * 360) + 'deg)';
         d.classList.toggle('marked', Math.random() < 0.5);
       });
@@ -320,16 +336,17 @@
     }
 
     function settle() {
-      // Random arrangement with exactly `roll` marked dice
-      var idx = [0, 1, 2, 3];
+      // Random arrangement with exactly `marks` marked dice
+      var idx = [];
+      for (var k = 0; k < live.length; k++) idx.push(k);
       for (var i = idx.length - 1; i > 0; i--) {
         var j = Math.floor(Math.random() * (i + 1));
         var t = idx[i]; idx[i] = idx[j]; idx[j] = t;
       }
-      var marked = new Set(idx.slice(0, roll));
-      dice.forEach(function (d, i) {
+      var marked = new Set(idx.slice(0, marks));
+      live.forEach(function (d, i2) {
         d.style.transform = 'rotate(' + (Math.floor(Math.random() * 30) - 15) + 'deg)';
-        d.classList.toggle('marked', marked.has(i));
+        d.classList.toggle('marked', marked.has(i2));
       });
       $('dice-total').textContent = String(roll);
       wrap.classList.add('settled');
@@ -396,9 +413,9 @@
     });
   }
 
-  function homeDots(n) {
+  function homeDots(n, total) {
     var dots = '';
-    for (var i = 0; i < 7; i++) {
+    for (var i = 0; i < (total || 7); i++) {
       dots += i < n ? '\u25CF' : '\u25CB';
     }
     return dots;
@@ -423,6 +440,7 @@
   function render(view) {
     var prevView = lastView;
     lastView = view;
+    if (view.rosettes) ROSETTES = new Set(view.rosettes);
     clearPendingMove();
 
     // Detect pieces that just bore off (while their old square is still in
@@ -451,7 +469,7 @@
     // Opponent panel
     if (view.opponent) {
       $('opp-name').textContent = view.opponent.name + (view.opponent.isBot ? ' (BOT)' : '');
-      $('opp-home').textContent = homeDots(view.opponent.homeCount);
+      $('opp-home').textContent = homeDots(view.opponent.homeCount, view.pieceCount);
       renderFinishedTray('opp-finished', view.opponent.offCount, 'p' + (1 - view.you));
     }
 
@@ -498,7 +516,7 @@
     // My pieces: dots for remaining (not yet borne off) + tokens for finished
     var myRemaining = view.piecesRemaining || 0;
     $('my-home').textContent = filledDots(myRemaining);
-    renderFinishedTray('my-finished', 7 - myRemaining, 'p' + view.you);
+    renderFinishedTray('my-finished', (view.pieceCount || 7) - myRemaining, 'p' + view.you);
 
     // Log
     var logList = $('log-list');
@@ -572,8 +590,15 @@
   });
 
   // ── Lobby ────────────────────────────────
+  var MODE_LABELS = {
+    finkel: 'Finkel — classic: 7 pieces, rosettes are safe',
+    masters: 'Masters — longer path, 3 dice (0 = 4), rosettes unsafe',
+    blitz: 'Blitz — 5 pieces, captures grant an extra roll',
+  };
+
   function renderLobby(payload) {
     $('lobby-code').textContent = payload.code;
+    $('lobby-mode').textContent = 'Rules: ' + (MODE_LABELS[payload.mode] || MODE_LABELS.finkel);
     var list = $('seat-list');
     list.innerHTML = '';
     payload.seats.forEach(function (s) {

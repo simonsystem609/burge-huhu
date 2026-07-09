@@ -280,6 +280,7 @@ function urEmitLobby(room) {
   const payload = {
     code: room.code,
     hostId: room.hostId,
+    mode: room.mode || 'finkel',
     seats: room.seats.map((s) => ({
       sid: s.socketId,
       name: s.name,
@@ -312,7 +313,7 @@ function urDriveBots(code) {
     if (!s || !s.isBot) return;
 
     if (r.game.phase === 'roll') {
-      r.game.lastRoll = urEngine.rollDice(Math.random);
+      r.game.lastRoll = urEngine.rollFor(r.game, Math.random);
       urEmitRoll(r, a.player, r.game.lastRoll);
       const moves = urEngine.legalMoves(r.game, a.player, r.game.lastRoll);
       if (moves.length === 0) {
@@ -352,11 +353,16 @@ urIo.on('connection', (socket) => {
     return room.seats.findIndex((s) => s.socketId === socket.id);
   }
 
-  socket.on('createRoom', ({ name, botDelayMs } = {}) => {
+  function urCleanMode(mode) {
+    return urEngine.MODES[mode] ? mode : 'finkel';
+  }
+
+  socket.on('createRoom', ({ name, botDelayMs, mode } = {}) => {
     const code = urMakeCode();
     const room = {
       code,
       hostId: socket.id,
+      mode: urCleanMode(mode),
       botDelay: Number(botDelayMs) || 700,
       seats: [{ name: name || 'Player', isBot: false, socketId: socket.id, playerIdx: 0 }],
       game: null,
@@ -383,17 +389,23 @@ urIo.on('connection', (socket) => {
     urEmitLobby(room);
   });
 
-  socket.on('singleplayer', ({ name, botDelayMs } = {}) => {
+  socket.on('singleplayer', ({ name, botDelayMs, mode } = {}) => {
     const code = urMakeCode();
+    const cleanMode = urCleanMode(mode);
     const room = {
       code,
       hostId: socket.id,
+      mode: cleanMode,
       botDelay: Number(botDelayMs) || 700,
       seats: [
         { name: name || 'You', isBot: false, socketId: socket.id, playerIdx: 0 },
         { name: 'Bot', isBot: true, socketId: null, playerIdx: 1 },
       ],
-      game: urEngine.createGame([{ id: 'p0', name: name || 'You', isBot: false }, { id: 'p1', name: 'Bot', isBot: true }]),
+      game: urEngine.createGame(
+        [{ id: 'p0', name: name || 'You', isBot: false }, { id: 'p1', name: 'Bot', isBot: true }],
+        undefined,
+        cleanMode
+      ),
     };
     urRooms.set(code, room);
     socket.emit('joined', { code });
@@ -407,7 +419,7 @@ urIo.on('connection', (socket) => {
     if (room.seats.length < 2) return socket.emit('errorMsg', 'Need 2 players');
     room.game = urEngine.createGame(room.seats.map((s, i) => ({
       id: 'p' + i, name: s.name, isBot: s.isBot,
-    })));
+    })), undefined, room.mode);
     urEmitGame(room);
     urDriveBots(room.code);
   });
@@ -420,7 +432,7 @@ urIo.on('connection', (socket) => {
     const si = urSeatIdx(room);
     if (si === -1 || room.game.turn !== si || room.game.phase !== 'roll') return;
 
-    room.game.lastRoll = urEngine.rollDice(Math.random);
+    room.game.lastRoll = urEngine.rollFor(room.game, Math.random);
     urEmitRoll(room, si, room.game.lastRoll);
     const moves = urEngine.legalMoves(room.game, si, room.game.lastRoll);
     if (moves.length === 0) {
@@ -447,7 +459,7 @@ urIo.on('connection', (socket) => {
     const move = moves.find((m) => {
       if (m.piece !== piece) return false;
       if (m.action === 'bearOff') return destPos === -1; // bear off
-      return m.dest !== undefined && urEngine.positionOf(si, m.dest) === destPos;
+      return m.dest !== undefined && urEngine.positionOf(room.game, si, m.dest) === destPos;
     });
     if (!move) return socket.emit('errorMsg', 'Invalid move');
 
@@ -504,7 +516,7 @@ urIo.on('connection', (socket) => {
     if (!room.game || room.game.phase !== 'over') return;
     room.game = urEngine.createGame(room.seats.map((s, i) => ({
       id: 'p' + i, name: s.name, isBot: s.isBot,
-    })));
+    })), undefined, room.mode);
     urEmitGame(room);
     urDriveBots(entry[0]);
   });

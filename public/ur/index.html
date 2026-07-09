@@ -26,6 +26,15 @@
           <input id="name-input" type="text" maxlength="12" placeholder="Enter your name" />
         </label>
 
+        <label class="field">
+          <span>Rules</span>
+          <select id="mode-select">
+            <option value="finkel" selected>Finkel &mdash; classic: 7 pieces, rosettes are safe</option>
+            <option value="masters">Masters &mdash; longer path, 3 dice (0 = 4), rosettes unsafe</option>
+            <option value="blitz">Blitz &mdash; 5 pieces, captures grant an extra roll</option>
+          </select>
+        </label>
+
         <label class="field inline">
           <span>Bot speed</span>
           <select id="bot-speed">
@@ -58,6 +67,7 @@
           <strong id="lobby-code">----</strong>
           <button id="btn-copy" class="ghost small">Copy</button>
         </div>
+        <p id="lobby-mode" class="hint"></p>
         <ul id="seat-list" class="seat-list"></ul>
         <div class="lobby-actions">
           <button id="btn-start" class="primary">Start game</button>
