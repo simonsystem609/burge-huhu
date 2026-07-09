@@ -217,21 +217,26 @@ input:focus, select:focus { outline: 2px solid #d4a060; }
 }
 #move-overlay.show { display: block; }
 #move-arrow-line {
-  stroke: #f39c12; stroke-width: 4; stroke-linecap: round;
+  stroke: #f39c12; stroke-width: 3; stroke-linecap: round;
   filter: drop-shadow(0 0 4px rgba(243,156,18,0.7));
 }
 #move-arrowhead polygon { fill: #f39c12; }
 #move-phantom-piece {
-  position: absolute; width: 36px; height: 36px; border-radius: 50%;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
-  transform: translate(-50%, -50%);
+  position: absolute;
+  filter: drop-shadow(0 3px 6px rgba(0,0,0,0.5));
   animation: phantom-bob 1s ease-in-out infinite;
 }
-#move-phantom-piece.p0 { background: #d9362e; border: 3px solid #7a1c17; }
-#move-phantom-piece.p1 { background: #2f6fd4; border: 3px solid #163a70; }
+#move-phantom-piece .phantom-blob { stroke-width: 1.5; }
+#move-phantom-piece .phantom-tail {
+  fill: none; stroke-width: 5; stroke-linecap: round;
+}
+#move-phantom-piece.p0 .phantom-blob { fill: #d9362e; stroke: #7a1c17; }
+#move-phantom-piece.p0 .phantom-tail { stroke: #d9362e; }
+#move-phantom-piece.p1 .phantom-blob { fill: #2f6fd4; stroke: #163a70; }
+#move-phantom-piece.p1 .phantom-tail { stroke: #2f6fd4; }
 @keyframes phantom-bob {
-  0%, 100% { transform: translate(-50%, -50%); }
-  50% { transform: translate(-50%, -58%); }
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
 }
 
 /* ── Home / Bear-off panels ──────────────── */

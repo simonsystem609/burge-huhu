@@ -158,9 +158,9 @@
     var curPos = pieceCurrentPos(pieceIdx);
     var srcCenter, phantom = null;
     if (curPos === null) {
-      // Entering from home: a phantom piece hovers above the entry square.
-      var offset = Math.max(50, destCenter.rect.height * 0.9);
-      srcCenter = { x: destCenter.x, y: destCenter.y - offset };
+      // Entering from home: a phantom blob hovers above the entry square,
+      // its tail tip (= the arrow's start point) touching down near it.
+      srcCenter = { x: destCenter.x, y: destCenter.y - destCenter.rect.height * 0.4 };
       phantom = srcCenter;
     } else {
       srcCenter = squareCenter(curPos);
@@ -175,9 +175,10 @@
 
     var phantomEl = $('move-phantom-piece');
     if (phantom) {
-      phantomEl.style.left = phantom.x + 'px';
-      phantomEl.style.top = phantom.y + 'px';
-      phantomEl.className = 'p' + lastView.you;
+      // The SVG's viewBox tail-tip sits at local (30, 110); anchor that point at `phantom`.
+      phantomEl.style.left = (phantom.x - 30) + 'px';
+      phantomEl.style.top = (phantom.y - 110) + 'px';
+      phantomEl.setAttribute('class', 'p' + lastView.you);
       phantomEl.style.display = 'block';
     } else {
       phantomEl.style.display = 'none';
