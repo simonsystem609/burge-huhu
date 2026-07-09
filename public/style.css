@@ -14,6 +14,7 @@
   --card-bg: #f6f1de;
   --card-ink: #1a1a1a;
   --anim-dur: 900ms;
+  --card-scale: 1;
   --radius: 14px;
   --shadow: 0 8px 26px rgba(0, 0, 0, 0.35);
 }
@@ -124,97 +125,107 @@ input:focus, select:focus { outline: 2px solid var(--accent); }
 /* ── Game table (grid — fixed zones, NO reflow) ───────────────────── */
 #screen-game { gap: 12px; padding: 12px; }
 .table {
+  position: relative;
   flex: 1;
   display: grid;
-  grid-template-rows: 140px 1fr 200px;
+  grid-template-rows: 148px 1fr auto;
   grid-template-columns: 1fr;
   background: radial-gradient(900px 500px at 50% 40%, var(--felt), var(--felt-2));
   border-radius: 18px;
   border: 6px solid #0a3a22;
   box-shadow: inset 0 0 60px rgba(0,0,0,0.4), var(--shadow);
-  padding: 16px;
-  contain: layout style size;
+  padding: 12px 16px;
+  contain: layout style;
   overflow: hidden;
 }
-.opponents { display: flex; justify-content: center; gap: 18px; flex-wrap: wrap; height: 140px; }
+.opponents { display: flex; justify-content: center; gap: 18px; min-width: 0; }
 .opp {
-  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
   padding: 8px 12px; border-radius: 12px; background: rgba(0,0,0,0.22);
   border: 2px solid transparent;
-  width: 230px;
+  width: 220px;
+  min-width: 0;
   height: 140px;
-  flex-shrink: 0;
+  flex-shrink: 1;
+  transition: border-color 0.25s, opacity 0.25s;
 }
 .opp.attacker { border-color: var(--gold); }
 .opp.defender { border-color: var(--warn); }
 .opp.finished { opacity: 0.5; }
 .opp .opp-name { font-weight: 700; font-size: 0.9em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .opp .opp-meta { color: var(--muted); font-size: 0.78em; }
-.opp .fan { display: flex; min-height: 84px; align-items: center; }
-.opp .fan .card.small { margin-left: -22px; }
-.opp .fan .card.small:first-child { margin-left: 0; }
+.opp .fan { width: 100%; max-width: 168px; height: 86px; flex: none; }
 
 .center-row {
   display: grid;
-  grid-template-columns: 140px 1fr 120px;
+  grid-template-columns: 150px 1fr 130px;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  min-height: 0;
 }
 .pile { display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .pile-label { color: var(--muted); font-size: 0.78em; text-align: center; white-space: nowrap; }
 .pile-label b { color: var(--ink); }
-
-.talon-group { width: 140px; }
-.talon-stack { position: relative; width: 74px; height: 96px; }
-.trump-peek {
-  position: absolute; left: -22px; top: 8px; transform: rotate(-20deg);
-  transition: filter 0.3s;
-}
-.trump-peek.picked { filter: grayscale(0.7) brightness(0.6); }
-.draw-stack { position: absolute; left: 14px; top: 0; z-index: 1; }
+.pile-spot { position: relative; width: 100%; height: 104px; }
+.stack-back { position: absolute; left: 50%; top: 50%; transition: opacity 0.3s; }
+#talon-spot .stack-back { transform: translate(calc(-50% + 12px), -50%); }
+#talon-spot .stack-back .card { box-shadow: -3px 3px 0 #5c0e18, -6px 6px 0 #45090f, 0 4px 10px rgba(0,0,0,0.4); }
+#discard-spot .stack-back { transform: translate(-50%, -50%) rotate(6deg); filter: brightness(0.82) saturate(0.85); }
+.stack-back.empty { opacity: 0; }
 .picked-label {
   display: none; color: var(--warn); font-weight: 800; font-size: 0.72em;
   letter-spacing: 0.5px; text-transform: uppercase;
 }
 .picked-label.show { display: block; }
 
-.discard-pile { width: 120px; }
-.discard-pile > .card { transform: rotate(5deg); filter: brightness(0.82) saturate(0.85); }
-
-.table-play { display: flex; flex-direction: column; align-items: center; gap: 8px; justify-content: center; }
-.table-play.drag-over-stage { background: rgba(229,181,58,0.08); border-radius: 14px; }
-.attack-staging {
-  display: flex; gap: 6px; align-items: center; justify-content: center;
-  min-height: 132px;
+.table-play { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; }
+/* Floats over the play area so changing text can never shift the layout. */
+.turn-banner {
+  position: absolute; top: 2px; left: 50%; transform: translateX(-50%);
+  width: max-content; max-width: min(520px, 92vw); z-index: 30; pointer-events: none;
+  padding: 4px 14px; border-radius: 12px; background: rgba(0, 0, 0, 0.32);
+  font-weight: 800; color: var(--gold); text-align: center; font-size: 0.92em;
 }
-.attack-staging .card { animation: slotIn 0.2s ease; }
-.table-cards { display: flex; gap: 16px; align-items: center; justify-content: center; min-height: 130px; flex-wrap: wrap; }
-.table-cards .slot { position: relative; animation: slotIn 0.25s ease; }
-.table-cards .slot.targetable { cursor: grab; }
-.table-cards .slot.targetable .card { box-shadow: 0 0 0 2px rgba(229,181,58,0.55), 0 3px 8px rgba(0,0,0,0.35); }
-.table-cards .slot.drag-over .card { box-shadow: 0 0 0 3px var(--accent), 0 3px 8px rgba(0,0,0,0.35); }
-.table-cards .slot.marked-pickup { opacity: 0.5; }
-.table-cards .slot.marked-pickup .card { box-shadow: 0 0 0 3px var(--warn), 0 3px 8px rgba(0,0,0,0.35); }
-.table-cards .slot .defense { position: absolute; left: 18px; top: 22px; }
-.table-cards .slot .pickup-tag {
-  position: absolute; bottom: -18px; left: 50%; transform: translateX(-50%);
-  font-size: 0.68em; font-weight: 800; color: var(--warn); white-space: nowrap;
-}
-@keyframes slotIn { from { opacity: 0; transform: translateY(10px) scale(0.9); } to { opacity: 1; transform: none; } }
-.turn-banner { font-weight: 800; color: var(--gold); min-height: 2.4em; text-align: center; display: flex; align-items: center; justify-content: center; }
+.turn-banner:empty { display: none; }
 .turn-banner.you { color: var(--accent); animation: pulse 1.3s infinite; }
 @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.55;} }
+#slots-area { flex: 1; width: 100%; min-height: 140px; border-radius: 14px; transition: background 0.2s; }
+#slots-area.drop-hint { background: rgba(229,181,58,0.07); }
 
-.me { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 10px; border-radius: 16px; transition: background 0.15s; overflow: hidden; }
-.me.drag-over-return { background: rgba(55,184,122,0.12); }
-.hand {
-  display: flex; justify-content: flex-start; gap: 6px; flex-wrap: wrap;
-  min-height: 132px; border-radius: 14px;
-  width: min(760px, 100%);
-}
-.hand .card.selected { transform: translateY(-16px); box-shadow: 0 0 0 3px var(--accent), 0 12px 22px rgba(0,0,0,0.45); }
-.hand .card[draggable="true"], .table-cards .slot.targetable .card, .attack-staging .card { cursor: grab; }
+.me { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 4px 10px 8px; }
+.hand-zone { width: min(780px, 100%); height: 152px; flex: none; border-radius: 14px; transition: background 0.2s; }
+.hand-zone.drop-return { background: rgba(55,184,122,0.1); }
 .my-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+
+/* ── Persistent card layer ─────────────────────────────────────────
+ * Every visible card is one long-lived element; movement is always a
+ * transform transition (translate/rotate/scale), flips are 3D rotations.
+ * Nothing here ever causes layout, so the page never jumps. */
+#card-layer { position: absolute; inset: 0; z-index: 5; pointer-events: none; }
+.pcard {
+  position: absolute; left: 0; top: 0; width: 92px; height: 132px;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  transform-origin: center center;
+  will-change: transform;
+  transition: transform var(--anim-dur) cubic-bezier(0.32, 0.68, 0.35, 1),
+    opacity calc(var(--anim-dur) * 0.7) ease;
+}
+.pcard.no-anim, .pcard.no-anim .pflip { transition: none !important; }
+.pcard .pflip { position: absolute; inset: 0; transform-style: preserve-3d; transition: transform calc(var(--anim-dur) * 0.55) ease; }
+.pcard.down .pflip { transform: rotateY(180deg); }
+.pface { position: absolute; inset: 0; backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+.pface.back { transform: rotateY(180deg); }
+.pface .card { width: 100%; height: 100%; }
+.pcard.clickable { cursor: pointer; }
+.pcard.dragging { cursor: grabbing; }
+.pcard.staged .card { box-shadow: 0 0 0 3px var(--accent), 0 14px 26px rgba(0,0,0,0.5); }
+.pcard.sel .card { box-shadow: 0 0 0 3px var(--gold), 0 10px 20px rgba(0,0,0,0.45); }
+.pcard.dim .card { filter: grayscale(0.55) brightness(0.8); }
+.pcard.targetable .card { box-shadow: 0 0 0 2px rgba(229,181,58,0.6), 0 3px 8px rgba(0,0,0,0.35); }
+.pcard.marked { opacity: 0.55; }
+.pcard.marked .card { box-shadow: 0 0 0 3px var(--warn), 0 3px 8px rgba(0,0,0,0.35); }
 
 /* Side log */
 .sidelog {
@@ -224,22 +235,6 @@ input:focus, select:focus { outline: 2px solid var(--accent); }
 .sidelog h3 { margin: 0 0 8px; color: var(--gold); font-size: 0.95rem; }
 #log-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; overflow: auto; font-size: 0.85em; color: var(--muted); }
 #log-list li { padding: 6px 8px; background: rgba(255,255,255,0.04); border-radius: 8px; }
-
-/* Flying card clone used to animate an attack, a beat, a discard, or a
- * pickup — for every player, not just the local one. Duration is a CSS
- * variable so the menu's animation-speed control affects every kind at once. */
-.flying-card {
-  position: fixed;
-  z-index: 9999;
-  margin: 0;
-  pointer-events: none;
-  filter: brightness(1.3) drop-shadow(0 0 8px rgba(255,255,255,0.5));
-  transition: left var(--anim-dur, 900ms) cubic-bezier(0.3, 0.6, 0.4, 1),
-    top var(--anim-dur, 900ms) cubic-bezier(0.3, 0.6, 0.4, 1),
-    width var(--anim-dur, 900ms) cubic-bezier(0.3, 0.6, 0.4, 1),
-    height var(--anim-dur, 900ms) cubic-bezier(0.3, 0.6, 0.4, 1),
-    transform var(--anim-dur, 900ms) ease, opacity var(--anim-dur, 900ms) ease;
-}
 
 /* ── Cards ─────────────────────────────────────────────────── */
 .card {
@@ -317,7 +312,14 @@ input:focus, select:focus { outline: 2px solid var(--accent); }
 
 /* Responsive */
 @media (max-width: 820px) {
+  :root { --card-scale: 0.72; }
   #screen-game { flex-direction: column; }
-  .sidelog { width: auto; max-height: 130px; }
-  .card { width: 66px; height: 96px; }
+  .sidelog { width: auto; height: 120px; flex: none; }
+  .table { grid-template-rows: 112px 1fr auto; padding: 8px 10px; }
+  .opponents { gap: 8px; }
+  .opp { width: 156px; height: 106px; padding: 6px 8px; }
+  .opp .fan { max-width: 118px; height: 60px; }
+  .center-row { grid-template-columns: 108px 1fr 96px; }
+  .pile-spot { height: 76px; }
+  .hand-zone { height: 112px; }
 }

@@ -64,9 +64,7 @@
 
             <div class="divider"></div>
 
-            <a href="/ur/" style="text-decoration:none">
-              <button type="button" class="primary" style="width:100%;background:#222;border-color:#444;color:#ccc">Royal Game of Ur</button>
-            </a>
+            <button id="btn-goto-ur" type="button" class="primary" style="width:100%;background:#222;border-color:#444;color:#ccc">Royal Game of Ur</button>
 
             <div class="divider"></div>
 
@@ -101,14 +99,13 @@
 
       <!-- GAME -->
       <section id="screen-game" class="screen">
-        <div class="table">
+        <div class="table" id="game-table">
           <div id="opponents" class="opponents"></div>
 
           <div class="center-row">
             <div class="pile talon-group">
-              <div class="talon-stack" id="talon-stack">
-                <div id="trump-card" class="trump-peek"></div>
-                <div id="talon-card" class="draw-stack"></div>
+              <div class="pile-spot" id="talon-spot">
+                <div class="stack-back" id="talon-back"><div class="card small card-back"><span></span></div></div>
               </div>
               <span class="pile-label">
                 <span data-i18n="trump">Adu</span> · <b id="trump-suit-name"></b> ·
@@ -118,25 +115,30 @@
             </div>
 
             <div class="table-play" id="table-play">
-              <div id="attack-staging" class="attack-staging"></div>
-              <div id="table-cards" class="table-cards"></div>
               <div id="turn-banner" class="turn-banner"></div>
+              <div id="slots-area"></div>
             </div>
 
             <div class="pile discard-pile">
-              <div id="discard-card"></div>
+              <div class="pile-spot" id="discard-spot">
+                <div class="stack-back" id="discard-back"><div class="card small card-back"><span></span></div></div>
+              </div>
               <span class="pile-label"><span data-i18n="discard">Dobott</span> · <b id="discard-count">0</b></span>
             </div>
           </div>
 
           <div class="me">
-            <div id="my-hand" class="hand"></div>
+            <div id="my-hand" class="hand-zone"></div>
             <div class="my-actions">
               <button id="btn-attack" class="primary" data-i18n="attackBtn">Küldés</button>
               <button id="btn-swap7" class="ghost" data-i18n="swap7">Adu VII csere</button>
               <button id="btn-leave-game" class="ghost small" data-i18n="leave">Kilépés</button>
             </div>
           </div>
+
+          <!-- Every visible card lives here as one persistent element; all
+               movement is a transform transition, never a DOM rebuild. -->
+          <div id="card-layer"></div>
         </div>
 
         <aside class="sidelog">
