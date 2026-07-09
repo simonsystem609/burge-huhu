@@ -13,20 +13,22 @@ const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no easily-confused cha
 
 let botCounter = 0;
 
-function makeCode(rooms) {
+function makeCode(rooms, isTaken) {
   let code;
   do {
     code = '';
     for (let i = 0; i < 4; i++) {
       code += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)];
     }
-  } while (rooms.has(code));
+  } while (rooms.has(code) || (isTaken && isTaken(code)));
   return code;
 }
 
 class RoomManager {
-  constructor() {
+  constructor({ isCodeTaken } = {}) {
     this.rooms = new Map(); // code -> room
+    // Optional extra check so codes stay unique across other games' rooms too.
+    this.isCodeTaken = isCodeTaken || null;
   }
 
   getRoom(code) {
@@ -34,7 +36,7 @@ class RoomManager {
   }
 
   createRoom(hostSocketId, name, lang = 'hu', { single = false } = {}) {
-    const code = makeCode(this.rooms);
+    const code = makeCode(this.rooms, this.isCodeTaken);
     const room = {
       code,
       hostId: hostSocketId,

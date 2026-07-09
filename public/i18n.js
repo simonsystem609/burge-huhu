@@ -95,6 +95,7 @@
       err_does_not_beat: 'Ez a lap nem üti.',
       err_bad_set: 'Ez nem egy szabályos lap-kombináció.',
       err_generic: 'Hiba történt.',
+      wrongGameUr: 'Ez a kód egy Royal Game of Ur szoba — átirányítás…',
     },
     en: {
       title: 'Bürge · Hühü',
@@ -170,6 +171,7 @@
       err_does_not_beat: 'That card does not beat it.',
       err_bad_set: 'That is not a legal card combination.',
       err_generic: 'Something went wrong.',
+      wrongGameUr: 'That code is a Royal Game of Ur room — taking you there…',
     },
   };
 

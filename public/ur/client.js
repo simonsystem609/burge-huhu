@@ -86,6 +86,9 @@
   $('btn-back').onclick = function () {
     window.location.href = '/';
   };
+  $('btn-goto-cards').onclick = function () {
+    window.location.href = '/';
+  };
   $('btn-rematch').onclick = function () { socket.emit('rematch'); };
   $('btn-menu').onclick = function () {
     $('overlay').classList.remove('show');
@@ -599,10 +602,35 @@
     playDiceAnimation(data.player, data.roll);
   });
   socket.on('errorMsg', function (msg) { toast(msg); });
+  // The code belongs to a card-game room — hop over there with the code
+  // prefilled so the join completes automatically.
+  socket.on('wrongGame', function (d) {
+    toast('That code is a card game room — taking you there…');
+    setTimeout(function () {
+      window.location.href = '/?join=' + encodeURIComponent((d && d.code) || '');
+    }, 1500);
+  });
   socket.on('leftRoom', function () { showScreen('screen-menu'); });
   socket.on('joined', function () {});
 
   socket.on('disconnect', function () { toast('Connection lost. Reconnecting...'); });
+
+  // A ?join=CODE in the URL (arriving from the card game's redirect) joins
+  // that room as soon as the socket is up.
+  var pendingJoin = null;
+  var joinParam = new URLSearchParams(window.location.search).get('join');
+  if (joinParam) {
+    pendingJoin = joinParam.trim().toUpperCase();
+    $('code-input').value = pendingJoin;
+    history.replaceState(null, '', window.location.pathname);
+  }
+  socket.on('connect', function () {
+    if (pendingJoin) {
+      var code = pendingJoin;
+      pendingJoin = null;
+      socket.emit('joinRoom', { code: code, name: myName() });
+    }
+  });
 
   // ── Init ────────────────────────────────
   showScreen('screen-menu');

@@ -15,7 +15,12 @@ const DEFAULT_BOT_DELAY = Number(process.env.BOT_DELAY_MS || 800);
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
-const rm = new RoomManager();
+
+// The card game and the Royal Game of Ur keep fully separate room maps, but
+// share one code space: a code can never mean two different rooms, so a join
+// attempt in the wrong game can be detected and redirected.
+const urRooms = new Map(); // code → ur room state
+const rm = new RoomManager({ isCodeTaken: (code) => urRooms.has(code) });
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/healthz', (_req, res) => res.type('text').send('ok'));
@@ -112,7 +117,12 @@ io.on('connection', (socket) => {
   socket.on('joinRoom', ({ code, name } = {}) => {
     const clean = String(code || '').trim().toUpperCase();
     const res = rm.joinRoom(clean, socket.id, name);
-    if (res.error) return socket.emit('errorMsg', res.error);
+    if (res.error) {
+      if (res.error === 'no_room' && urRooms.has(clean)) {
+        return socket.emit('wrongGame', { game: 'ur', code: clean });
+      }
+      return socket.emit('errorMsg', res.error);
+    }
     socket.emit('joined', { code: res.room.code });
     emitLobby(res.room);
   });
@@ -212,11 +222,13 @@ io.on('connection', (socket) => {
 
   socket.on('rejoin', ({ code, oldSid } = {}) => {
     let room = rm.getRoom(String(code || '').trim().toUpperCase());
-    if (!room) return socket.emit('errorMsg', 'no_room');
+    // A failed auto-rejoin is not the user's doing — fail silently so the
+    // client just clears its stored room instead of showing "no such room".
+    if (!room) return socket.emit('rejoinFailed');
     const seat = rm.rejoinRoom(room, socket.id, oldSid);
     if (!seat) {
       const res = rm.joinRoom(room.code, socket.id, '');
-      if (res.error) return socket.emit('errorMsg', res.error);
+      if (res.error) return socket.emit('rejoinFailed');
       room = res.room;
     }
     socket.emit('rejoined', { code: room.code });
@@ -232,13 +244,12 @@ const urEngine = require('./game/ur/engine');
 const urBot = require('./game/ur/bot');
 
 const urIo = io.of('/ur');
-const urRooms = new Map(); // code → ur room state
 
 function urMakeCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let code;
   do { code = ''; for (let i = 0; i < 4; i++) code += chars[Math.floor(Math.random() * chars.length)]; }
-  while (urRooms.has(code));
+  while (urRooms.has(code) || rm.getRoom(code));
   return code;
 }
 
@@ -356,12 +367,19 @@ urIo.on('connection', (socket) => {
   });
 
   socket.on('joinRoom', ({ code, name } = {}) => {
-    const room = urRooms.get(String(code || '').trim().toUpperCase());
-    if (!room) return socket.emit('errorMsg', 'Room not found');
+    const clean = String(code || '').trim().toUpperCase();
+    const room = urRooms.get(clean);
+    if (!room) {
+      const cardRoom = rm.getRoom(clean);
+      if (cardRoom && !cardRoom.single) {
+        return socket.emit('wrongGame', { game: 'cards', code: clean });
+      }
+      return socket.emit('errorMsg', 'Room not found');
+    }
     if (room.seats.length >= 2) return socket.emit('errorMsg', 'Room full');
     if (room.game) return socket.emit('errorMsg', 'Game in progress');
     room.seats.push({ name: name || 'Player', isBot: false, socketId: socket.id, playerIdx: 1 });
-    socket.emit('joined', { code });
+    socket.emit('joined', { code: clean });
     urEmitLobby(room);
   });
 
@@ -440,14 +458,41 @@ urIo.on('connection', (socket) => {
     urDriveBots(room.code);
   });
 
-  socket.on('leaveRoom', () => {
+  // A human leaving or disconnecting: mid-game their seat is taken over by a
+  // bot so the other player can keep playing; in the lobby the seat is simply
+  // removed. The room is only dropped once no connected humans remain.
+  function urDropPlayer(socketId) {
     const entry = [...urRooms.entries()].find(([, r]) =>
-      r.seats.some((s) => s.socketId === socket.id));
-    if (!entry) return socket.emit('leftRoom');
-    const room = entry[1];
-    const seat = room.seats.find((s) => s.socketId === socket.id);
-    if (seat) seat.isBot = true;
-    urRooms.delete(entry[0]);
+      r.seats.some((s) => s.socketId === socketId));
+    if (!entry) return;
+    const [code, room] = entry;
+    const seat = room.seats.find((s) => s.socketId === socketId);
+    if (seat) {
+      seat.socketId = null;
+      if (room.game) {
+        seat.isBot = true;
+        if (room.game.players[seat.playerIdx]) room.game.players[seat.playerIdx].isBot = true;
+      }
+    }
+    if (!room.seats.some((s) => s.socketId)) {
+      urRooms.delete(code);
+      return;
+    }
+    if (room.hostId === socketId) {
+      room.hostId = room.seats.find((s) => s.socketId).socketId;
+    }
+    if (room.game) {
+      urEmitGame(room);
+      urDriveBots(code);
+    } else {
+      room.seats = room.seats.filter((s) => s.socketId);
+      room.seats.forEach((s, i) => { s.playerIdx = i; });
+      urEmitLobby(room);
+    }
+  }
+
+  socket.on('leaveRoom', () => {
+    urDropPlayer(socket.id);
     socket.emit('leftRoom');
   });
 
@@ -465,15 +510,7 @@ urIo.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    const entry = [...urRooms.entries()].find(([, r]) =>
-      r.seats.some((s) => s.socketId === socket.id));
-    if (!entry) return;
-    const room = entry[1];
-    const seat = room.seats.find((s) => s.socketId === socket.id);
-    if (seat) { seat.isBot = true; seat.socketId = null; }
-    if (!room.seats.some((s) => s.socketId)) {
-      urRooms.delete(entry[0]);
-    }
+    urDropPlayer(socket.id);
   });
 });
 
