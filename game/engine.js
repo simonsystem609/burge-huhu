@@ -87,6 +87,11 @@ function createGame(players, rng = Math.random) {
     trumpCard,
     trumpSuit,
     trumpPicked: false, // true once the trump card has actually been drawn out
+    // Public memory: cards each player is KNOWN to hold, maintained from
+    // public events only (visible pickups, the face-up trump being drawn,
+    // the swap7 exchange). Any player watching the table could keep this
+    // list themselves — it reveals nothing hidden.
+    knownHolds: gamePlayers.map(() => []),
     discard: [],
     attacker: 0,
     defender: 1,
@@ -123,11 +128,29 @@ function nextActive(state, from) {
   return from;
 }
 
+/** A card publicly entered this player's hand (pickup, trump draw, swap). */
+function knowHold(state, playerIndex, card) {
+  const list = state.knownHolds && state.knownHolds[playerIndex];
+  if (list && !list.includes(card)) list.push(card);
+}
+
+/** A card publicly left this player's hand (played onto the table, swapped away). */
+function forgetHold(state, playerIndex, card) {
+  const list = state.knownHolds && state.knownHolds[playerIndex];
+  if (!list) return;
+  const i = list.indexOf(card);
+  if (i !== -1) list.splice(i, 1);
+}
+
 /** Draw one card from the top of the talon (talon end). */
 function drawOne(state, player) {
   if (state.talon.length === 0) return false;
   const card = state.talon.pop();
-  if (card === state.trumpCard) state.trumpPicked = true;
+  if (card === state.trumpCard) {
+    state.trumpPicked = true;
+    // The face-up trump is public — everyone sees who draws it.
+    knowHold(state, state.players.indexOf(player), card);
+  }
   player.hand.push(card);
   return true;
 }
@@ -379,6 +402,8 @@ function applyMove(state, playerIndex, move) {
     // Swap: take the face-up trump into hand, put our VII at the bottom.
     removeCard(p, trumpSeven);
     p.hand.push(state.trumpCard);
+    knowHold(state, playerIndex, state.trumpCard); // taken in full view
+    forgetHold(state, playerIndex, trumpSeven);
     state.talon[0] = trumpSeven;
     state.trumpCard = trumpSeven;
     pushLog(state, 'swap7', { player: playerIndex });
@@ -398,7 +423,10 @@ function applyMove(state, playerIndex, move) {
     if (cards.length > state.players[state.defender].hand.length) {
       throw new Error('illegal:too_many_cards');
     }
-    for (const c of cards) removeCard(p, c);
+    for (const c of cards) {
+      removeCard(p, c);
+      forgetHold(state, playerIndex, c);
+    }
     state.table.slots = cards.map((c) => ({ attack: c, defense: null }));
     state.phase = 'defense';
     pushLog(state, 'attack', { player: playerIndex, cards });
@@ -419,6 +447,7 @@ function applyMove(state, playerIndex, move) {
     }
     const pickedUp = undefended.map((s) => s.attack);
     defender.hand.push(...pickedUp);
+    for (const c of pickedUp) knowHold(state, playerIndex, c); // taken in full view
     if (pickedUp.length > 0) {
       pushLog(state, 'take', { player: playerIndex, cards: pickedUp });
     }
@@ -438,6 +467,7 @@ function applyMove(state, playerIndex, move) {
       throw new Error('illegal:does_not_beat');
     }
     removeCard(defender, move.card);
+    forgetHold(state, playerIndex, move.card);
     slot.defense = move.card;
     pushLog(state, 'defend', {
       player: playerIndex,
@@ -550,6 +580,8 @@ function viewFor(state, playerIndex) {
     finishedOrder: [...state.finishedOrder],
     log: state.log.slice(-8),
     drewLast: state.drewLast || [],
+    // Public memory (see createGame): what each player is known to hold.
+    knownHolds: (state.knownHolds || []).map((a) => [...a]),
   };
 }
 

@@ -88,7 +88,12 @@ function driveBots(code) {
     if (!a) return;
     const s = r.seats[a.player];
     if (!s || !s.isBot) return;
-    const move = chooseMove(r.game, a.player);
+    // Seat temperament + a bit of temperature: bots vary their play.
+    const move = chooseMove(r.game, a.player, undefined, {
+      style: s.style,
+      temp: 0.6,
+      rng: Math.random,
+    });
     if (!move) return;
     try {
       applyMove(r.game, a.player, move);

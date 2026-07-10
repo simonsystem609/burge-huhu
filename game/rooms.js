@@ -110,10 +110,13 @@ class RoomManager {
     if (room.started) return { error: 'in_progress' };
     if (room.seats.length >= MAX_SEATS) return { error: 'full' };
     botCounter += 1;
+    const styles = ['balanced', 'aggressive', 'gatherer', 'cautious'];
     room.seats.push({
       id: `bot_${botCounter}`,
       name: `Bot ${room.seats.filter((s) => s.isBot).length + 1}`,
       isBot: true,
+      // Each bot gets a temperament for the whole room's lifetime.
+      style: styles[Math.floor(Math.random() * styles.length)],
       socketId: null,
       clientId: null,
       connected: true,

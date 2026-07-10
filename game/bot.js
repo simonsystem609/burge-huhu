@@ -46,7 +46,35 @@ const DEFAULT_WEIGHTS = {
   raceGiveQuality: 0.4, // race-phase giveaway penalty — send aggressively
   forceTake: 16, // attack no combination of unseen cards can fully beat
   unbeatable: 3, // per attack card that no unseen card can beat
+  fish: 1.2, // trump fishing: dump big while trumpless to draw fresh cards
 };
+
+// Bot personalities: weight multipliers giving each bot a temperament.
+// 'balanced' plays the trained optimum; the others trade a little strength
+// for character. Server bots get a random style per seat.
+const PERSONALITIES = {
+  balanced: {},
+  aggressive: {
+    fillShed: 1.3, raceShed: 1.3, forceTake: 1.3, deny: 1.25,
+    giveQuality: 0.7, raceGiveQuality: 0.7,
+  },
+  gatherer: {
+    pickTrump: 2.2, pickPair: 2.0, pickHigh: 1.6, pickJunk: 0.6,
+    skipTurn: 0.6, fish: 1.5,
+  },
+  cautious: {
+    giveQuality: 1.35, breakPair: 1.4, spend: 1.2, trumpPremium: 1.25,
+    fillShed: 0.75,
+  },
+};
+
+function applyStyle(base, style) {
+  const mult = PERSONALITIES[style];
+  if (!mult) return base;
+  const w = { ...base };
+  for (const k in mult) w[k] = w[k] * mult[k];
+  return w;
+}
 
 /**
  * Honest card counting: everything a player at this seat could know from
@@ -65,6 +93,24 @@ function unseenCards(state, playerIndex) {
   }
   if (state.talon.length > 0 && state.talon[0] === state.trumpCard) seen.add(state.trumpCard);
   return fullDeck().filter((c) => !seen.has(c));
+}
+
+/**
+ * Per-player memory, applied: the cards the DEFENDER could possibly hold.
+ * Cards publicly known to sit in some OTHER player's hand (engine-tracked
+ * knownHolds — visible pickups, the trump draw, swap7) cannot be the
+ * defender's, so they leave the pool. Still a superset of their real hand,
+ * so "no full defense exists" stays provable — just provable more often.
+ */
+function defenderPool(state, playerIndex, unseen) {
+  if (!state.knownHolds) return unseen;
+  const othersKnown = new Set();
+  state.players.forEach((p, i) => {
+    if (i === state.defender || i === playerIndex) return;
+    for (const c of state.knownHolds[i] || []) othersKnown.add(c);
+  });
+  if (othersKnown.size === 0) return unseen;
+  return unseen.filter((c) => !othersKnown.has(c));
 }
 
 function quality(card, trumpSuit, W) {
@@ -96,7 +142,7 @@ function pairUsage(hand, set) {
   return { used, broken };
 }
 
-function scoreAttack(set, hand, trumpSuit, race, W, unseen) {
+function scoreAttack(set, hand, trumpSuit, race, W, ctx) {
   const shed = set.length;
   let score = race ? W.raceShed * shed : W.fillShed * shed;
   const giveW = race ? W.raceGiveQuality : W.giveQuality;
@@ -105,19 +151,23 @@ function scoreAttack(set, hand, trumpSuit, race, W, unseen) {
   score += W.usePair * used - W.breakPair * broken;
   if (race && shed === hand.length) score += W.finishBonus;
 
-  // Card counting (public info only — see unseenCards), race phase only:
-  // there, forcing a pickup is pure profit (their hand grows, ours shrinks).
-  // If no combination of unseen cards can beat this whole set the defender
-  // must take it — heads-up with the talon empty "unseen" IS their exact
-  // hand; otherwise it fires only when a full beat is provably impossible.
-  // In the fill phase forcing pickups just gifts them strong cards.
-  if (unseen && race) {
-    if (!findFullDefense(set, unseen, trumpSuit)) {
+  // Trump fishing: holding no worthwhile trump while the talon lasts,
+  // dumping BIG means drawing that many fresh cards — a chance at trumps.
+  // Only mass churn counts; single-card dribbles don't refresh the hand.
+  if (ctx && ctx.fishing && shed >= 3) score += W.fish * shed;
+
+  // Card counting (public info only — unseen minus other players' known
+  // holdings), race phase only: there, forcing a pickup is pure profit.
+  // If no combination of cards the defender could possibly hold beats this
+  // whole set, they MUST take it — heads-up with the talon empty the pool
+  // IS their exact hand; otherwise it fires only when provably impossible.
+  if (ctx && ctx.pool && race) {
+    if (!findFullDefense(set, ctx.pool, trumpSuit)) {
       score += W.forceTake * shed;
     } else {
       let sure = 0;
       for (const c of set) {
-        if (!unseen.some((u) => beats(c, u, trumpSuit))) sure++;
+        if (!ctx.pool.some((u) => beats(c, u, trumpSuit))) sure++;
       }
       score += W.unbeatable * sure;
     }
@@ -154,8 +204,13 @@ function bestBeater(attack, hand, trumpSuit, W) {
   return best ? { card: best, cost: bestCost } : null;
 }
 
-function chooseMove(state, playerIndex, weights) {
-  const W = weights || DEFAULT_WEIGHTS;
+function chooseMove(state, playerIndex, weights, opts) {
+  const o = opts || {};
+  let W = weights || DEFAULT_WEIGHTS;
+  if (o.style) W = applyStyle(W, o.style);
+  const temp = o.temp || 0;
+  const rng = o.rng || Math.random;
+
   const moves = legalMoves(state, playerIndex);
   if (moves.length === 0) return null;
 
@@ -170,16 +225,27 @@ function chooseMove(state, playerIndex, weights) {
   const attackMoves = moves.filter((m) => m.type === 'attack');
   if (attackMoves.length > 0) {
     const unseen = unseenCards(state, playerIndex);
-    let best = attackMoves[0];
-    let bestScore = -Infinity;
-    for (const m of attackMoves) {
-      const s = scoreAttack(m.cards, hand, trumpSuit, race, W, unseen);
-      if (s > bestScore) {
-        bestScore = s;
-        best = m;
-      }
+    const bestTrump = Math.max(
+      -1,
+      ...hand.filter((c) => cardSuit(c) === trumpSuit).map((c) => strength(c))
+    );
+    const ctx = {
+      pool: defenderPool(state, playerIndex, unseen),
+      fishing: !race && state.talon.length > 1 && bestTrump < 3,
+    };
+    const scored = attackMoves.map((m) => ({
+      m,
+      s: scoreAttack(m.cards, hand, trumpSuit, race, W, ctx),
+    }));
+    scored.sort((a, b) => b.s - a.s);
+    // Temperature: with temp > 0, any move close enough to the best is fair
+    // game — bots get occasional bold, off-script sends.
+    if (temp > 0 && scored.length > 1) {
+      const cutoff = scored[0].s - temp * 6;
+      const pool = scored.filter((x) => x.s >= cutoff);
+      return pool[Math.floor(rng() * pool.length)].m;
     }
-    return best;
+    return scored[0].m;
   }
 
   // ── Defense ──────────────────────────────────────────────────────
@@ -210,4 +276,4 @@ function chooseMove(state, playerIndex, weights) {
   return { type: 'take' };
 }
 
-module.exports = { chooseMove, DEFAULT_WEIGHTS };
+module.exports = { chooseMove, DEFAULT_WEIGHTS, PERSONALITIES };
