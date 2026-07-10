@@ -21,7 +21,7 @@
  */
 
 const { legalMoves, findFullDefense } = require('./engine');
-const { cardSuit, cardRank, strength, beats } = require('./deck');
+const { cardSuit, cardRank, strength, beats, fullDeck } = require('./deck');
 
 // Weights tuned by scripts/train-bot.js self-play runs (hill-climbing on
 // thousands of seeded games vs the previous bot; validated on fresh seeds).
@@ -44,8 +44,28 @@ const DEFAULT_WEIGHTS = {
   raceBloat: 10, // per card picked up once the talon is empty
   skipTurn: 3.92, // taking skips our next attack turn
   raceGiveQuality: 0.4, // race-phase giveaway penalty — send aggressively
-  forceTake: 16, // 2p race: attack the defender provably cannot fully beat
+  forceTake: 16, // attack no combination of unseen cards can fully beat
+  unbeatable: 3, // per attack card that no unseen card can beat
 };
+
+/**
+ * Honest card counting: everything a player at this seat could know from
+ * watching the game — the full deck minus their own hand, the discard pile
+ * (every discarded card crossed the table face-up), the table, and the
+ * face-up trump card while it still sits under the talon. Whatever remains
+ * is "unseen": the union of the other hands and the face-down talon.
+ * (Heads-up with the talon empty this IS the opponent's exact hand.)
+ */
+function unseenCards(state, playerIndex) {
+  const seen = new Set(state.players[playerIndex].hand);
+  for (const c of state.discard) seen.add(c);
+  for (const slot of state.table.slots) {
+    seen.add(slot.attack);
+    if (slot.defense != null) seen.add(slot.defense);
+  }
+  if (state.talon.length > 0 && state.talon[0] === state.trumpCard) seen.add(state.trumpCard);
+  return fullDeck().filter((c) => !seen.has(c));
+}
 
 function quality(card, trumpSuit, W) {
   return strength(card) + (cardSuit(card) === trumpSuit ? W.trumpPremium : 0);
@@ -76,7 +96,7 @@ function pairUsage(hand, set) {
   return { used, broken };
 }
 
-function scoreAttack(set, hand, trumpSuit, race, W, state) {
+function scoreAttack(set, hand, trumpSuit, race, W, unseen) {
   const shed = set.length;
   let score = race ? W.raceShed * shed : W.fillShed * shed;
   const giveW = race ? W.raceGiveQuality : W.giveQuality;
@@ -85,13 +105,21 @@ function scoreAttack(set, hand, trumpSuit, race, W, state) {
   score += W.usePair * used - W.breakPair * broken;
   if (race && shed === hand.length) score += W.finishBonus;
 
-  // Heads-up endgame is perfect information: with the talon empty, every
-  // hidden card is in the defender's hand — count them. An attack the
-  // defender provably cannot fully beat forces a pickup and bloats them.
-  if (race && state && state.players.length === 2) {
-    const defHand = state.players[state.defender].hand;
-    if (!findFullDefense(set, defHand, trumpSuit)) {
+  // Card counting (public info only — see unseenCards), race phase only:
+  // there, forcing a pickup is pure profit (their hand grows, ours shrinks).
+  // If no combination of unseen cards can beat this whole set the defender
+  // must take it — heads-up with the talon empty "unseen" IS their exact
+  // hand; otherwise it fires only when a full beat is provably impossible.
+  // In the fill phase forcing pickups just gifts them strong cards.
+  if (unseen && race) {
+    if (!findFullDefense(set, unseen, trumpSuit)) {
       score += W.forceTake * shed;
+    } else {
+      let sure = 0;
+      for (const c of set) {
+        if (!unseen.some((u) => beats(c, u, trumpSuit))) sure++;
+      }
+      score += W.unbeatable * sure;
     }
   }
   return score;
@@ -141,10 +169,11 @@ function chooseMove(state, playerIndex, weights) {
 
   const attackMoves = moves.filter((m) => m.type === 'attack');
   if (attackMoves.length > 0) {
+    const unseen = unseenCards(state, playerIndex);
     let best = attackMoves[0];
     let bestScore = -Infinity;
     for (const m of attackMoves) {
-      const s = scoreAttack(m.cards, hand, trumpSuit, race, W, state);
+      const s = scoreAttack(m.cards, hand, trumpSuit, race, W, unseen);
       if (s > bestScore) {
         bestScore = s;
         best = m;

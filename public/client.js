@@ -195,11 +195,11 @@
   let timers = [];
   const discarding = new Set(); // cards mid-flight to the discard pile
   let staged = new Set(); // my cards staged for an attack (client-side only)
-  let markedPickup = new Set(); // table slot indices I've given up on
   let selectedDef = null; // hand card selected to defend with (click flow)
   // Local (unconfirmed) defense assignments: slot index -> hand card placed
   // on it. Nothing is sent to the server until the Beat button confirms, so
-  // the player can freely swap cards around or change their mind.
+  // the player can freely swap cards around or change their mind. Slots
+  // left without a card are picked up automatically on confirm.
   let pendingDef = new Map();
 
   function clearSceneTimers() {
@@ -214,7 +214,6 @@
     fans = {};
     discarding.clear();
     staged.clear();
-    markedPickup.clear();
     pendingDef.clear();
     selectedDef = null;
   }
@@ -335,22 +334,29 @@
     if (!fr) return { x: -80, y: -80, scale: PILE_SCALE * s, z: Z.flight };
     return { x: fr.x + fr.w / 2, y: fr.y + fr.h / 2, scale: PILE_SCALE * s, z: Z.flight };
   }
+  // Attack/defense slots spread across the full play area; each defense
+  // card lands clearly offset onto ITS attack card. If slots still have to
+  // overlap, odd ones drop into a second row (zigzag) so the pairs stay
+  // visually unambiguous.
   function slotPos(a, s, i, n, which) {
     const sr = a.slots;
     const cw = CW * s;
-    const defOff = 20 * s;
+    const defOff = 26 * s;
     const slotW = cw + defOff;
-    const gap = 18 * s;
+    const gap = 30 * s;
     let stepX = slotW + gap;
+    let zigzag = false;
     if (n * slotW + (n - 1) * gap > sr.w && n > 1) {
       stepX = (sr.w - slotW) / (n - 1);
+      zigzag = stepX < slotW * 0.9;
     }
     const usedW = slotW + stepX * (n - 1);
     const first = sr.x + (sr.w - usedW) / 2 + cw / 2;
     const cx = first + i * stepX;
-    const cy = sr.y + sr.h / 2 - 8 * s;
+    let cy = sr.y + sr.h / 2 - 14 * s;
+    if (zigzag && i % 2 === 1) cy += 34 * s;
     if (which === 'defense') {
-      return { x: cx + defOff, y: cy + 24 * s, rot: 7, scale: s, z: Z.tableD + i };
+      return { x: cx + defOff, y: cy + 30 * s, rot: 8, scale: s, z: Z.tableD + i };
     }
     return { x: cx, y: cy, scale: s, z: Z.tableA + i };
   }
@@ -552,17 +558,11 @@
     }
     const myDefense = view.yourTurn && view.phase === 'defense';
     $('btn-beat').style.display = myDefense && view.table.slots.length > 0 ? '' : 'none';
-    if (myDefense) $('btn-beat').disabled = !defenseComplete(view);
+    // Always confirmable: whatever has no card on it gets picked up.
+    if (myDefense) $('btn-beat').disabled = false;
     $('btn-swap7').style.display = view.legal.some((m) => m.type === 'swap7') ? '' : 'none';
   }
 
-  // Every open slot is dealt with (a card placed on it, or marked for
-  // pickup) — only then can the Beat button confirm the whole defense.
-  function defenseComplete(view) {
-    return view.table.slots.every(
-      (slot, i) => slot.defense != null || pendingDef.has(i) || markedPickup.has(i)
-    );
-  }
 
   // ── Settle: reconcile the scene with a view (idempotent) ─────────
   // Choreography only pre-moves elements; settle is the actual renderer.
@@ -596,17 +596,12 @@
     staged = new Set([...staged].filter((c) => view.hand.includes(c)));
     if (!(view.yourTurn && view.phase === 'attack')) staged.clear();
     if (!(view.yourTurn && view.phase === 'defense')) {
-      markedPickup.clear();
       pendingDef.clear();
       selectedDef = null;
     } else {
       [...pendingDef.entries()].forEach(([slot, card]) => {
         const sl = view.table.slots[slot];
         if (!sl || sl.defense != null || !view.hand.includes(card)) pendingDef.delete(slot);
-      });
-      [...markedPickup].forEach((i) => {
-        const sl = view.table.slots[i];
-        if (!sl || sl.defense != null) markedPickup.delete(i);
       });
     }
 
@@ -650,8 +645,7 @@
         kind: 'attack',
         slot: i,
         cls: {
-          targetable: myDefense && open && !markedPickup.has(i) && !pendingDef.has(i),
-          marked: markedPickup.has(i),
+          targetable: myDefense && open && !pendingDef.has(i),
           clickable: myDefense && open,
         },
       });
@@ -1082,19 +1076,15 @@
     const py = e.clientY - L.top;
     if (drag.kind === 'hand' && sceneView.phase === 'attack') {
       $('slots-area').classList.toggle('drop-hint', py < a.hand.y - 10);
-    } else if (drag.kind === 'attack') {
-      $('my-hand').classList.toggle('drop-return', py > a.hand.y - 10);
     }
   }
   function clearDropHints() {
     $('slots-area').classList.remove('drop-hint');
-    $('my-hand').classList.remove('drop-return');
   }
 
   // Place a hand card on a slot locally (unconfirmed — Beat submits it).
   function assignDefense(slot, card) {
     pendingDef.set(slot, card);
-    markedPickup.delete(slot);
     selectedDef = null;
     settle(sceneView, false);
   }
@@ -1119,7 +1109,6 @@
         (m) =>
           m.type === 'defend' &&
           m.card === d.card &&
-          !markedPickup.has(m.slot) &&
           !pendingDef.has(m.slot) &&
           view.table.slots[m.slot] &&
           view.table.slots[m.slot].defense == null
@@ -1142,9 +1131,6 @@
         return toast(t(lang, 'err_does_not_beat'));
       }
       if (pendingDef.has(slotIdx)) return unassignDefense(slotIdx);
-      if (markedPickup.has(slotIdx)) markedPickup.delete(slotIdx);
-      else markedPickup.add(slotIdx);
-      settle(view, false);
     }
   }
 
@@ -1197,17 +1183,6 @@
       settle(view, false);
       return;
     }
-    if (d.kind === 'attack' && view.phase === 'defense') {
-      if (!aboveHand) {
-        const slotIdx = Number(d.slot);
-        if (view.table.slots[slotIdx] && view.table.slots[slotIdx].defense == null) {
-          pendingDef.delete(slotIdx);
-          markedPickup.add(slotIdx);
-        }
-      }
-      settle(view, false);
-      return;
-    }
     settle(view, false);
   }
 
@@ -1233,12 +1208,11 @@
     if (!legalMatch) return toast(t(lang, 'err_bad_set'));
     socket.emit('move', { move: { type: 'attack', cards: legalMatch.cards } });
   };
-  // Confirm the whole defense at once: submit each placed card, then take
-  // whatever was marked for pickup. (A full beat resolves on its own.)
+  // Confirm the whole defense at once: submit each placed card, then pick
+  // up everything left uncovered. (A full beat resolves on its own.)
   $('btn-beat').onclick = () => {
     const view = sceneView;
     if (!view || !(view.yourTurn && view.phase === 'defense')) return;
-    if (!defenseComplete(view)) return;
     const entries = [...pendingDef.entries()].sort((x, y) => x[0] - y[0]);
     const needTake = view.table.slots.some(
       (slot, i) => slot.defense == null && !pendingDef.has(i)
@@ -1248,7 +1222,6 @@
     });
     if (needTake) socket.emit('move', { move: { type: 'take' } });
     pendingDef.clear();
-    markedPickup.clear();
   };
   $('btn-swap7').onclick = () => socket.emit('move', { move: { type: 'swap7' } });
   $('btn-leave-game').onclick = () => {
@@ -1347,8 +1320,8 @@
         <li>Támadáshoz húzd ki a lapo(ka)t az asztalra: egyet, egy <b>párost</b> (két azonos értékű lap,
         bármilyen színben — pl. piros ász + zöld ász) + 1 tetszőleges kísérő lapot, vagy két párost + 1
         kísérőt — legfeljebb annyit, amennyi lap éppen a védőnél van — majd kattints: Küldés.</li>
-        <li>Védéskor húzz egy lapot egy kirakott lapra, ha üti; vagy húzd magadhoz a lapot, ha felveszed.
-        Az ütés sosem kötelező, mindig felveheted, amit nem akarsz vagy nem tudsz leütni.</li>
+        <li>Védéskor tedd a lapjaid az ütendő lapokra, majd nyomd meg az Ütés gombot — amire nem
+        tettél lapot, azt felveszed. Az ütés sosem kötelező, és a gomb megnyomásáig bármit átrendezhetsz.</li>
         <li>Amint minden kirakott lap el van intézve (leütve vagy felvéve), a kör automatikusan lezárul:
         a leütött lapok a dobóba kerülnek, a felvett lapok a kezedbe. Ha mindent
         leütöttél, te leszel a következő támadó; ha felvettél valamit, kimaradsz, a következő játékos támad.</li>
@@ -1371,8 +1344,8 @@
         <li>To attack, drag card(s) onto the table: one, a <b>pair</b> (two cards of the same rank, any suits
         — e.g. red ace + green ace) + 1 free extra card, or two pairs + 1 extra — capped at the defender's
         current hand size — then click Send.</li>
-        <li>To defend, drag a hand card onto a table card to beat it, or drag a table card onto yourself to
-        pick it up. Beating is never mandatory — you can always give up on any card you don't want or can't beat.</li>
+        <li>To defend, place hand cards onto the attacks you want to beat, then press Beat — everything
+        left uncovered is picked up. Beating is never mandatory, and you can rearrange freely until you confirm.</li>
         <li>Once every card on the table has been dealt with (beaten or picked up), the round resolves
         automatically: beaten cards go to discard, picked-up cards go to your hand. If you beat everything,
         you lead next; if you picked anything up, you're skipped and the next player leads.</li>

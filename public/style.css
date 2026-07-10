@@ -156,17 +156,21 @@ input:focus, select:focus { outline: 2px solid var(--accent); }
 .opp .opp-meta { color: var(--muted); font-size: 0.78em; }
 .opp .fan { width: 100%; max-width: 168px; height: 86px; flex: none; }
 
+/* Piles sit in slim strips ABOVE and BELOW the play area so the
+ * attack/defense row gets the full table width — even on phones. */
 .center-row {
   display: grid;
-  grid-template-columns: 150px 1fr 130px;
-  align-items: center;
-  gap: 10px;
+  grid-template-columns: 1fr;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 2px;
   min-height: 0;
 }
-.pile { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.pile { display: flex; flex-direction: row; align-items: center; gap: 12px; min-height: 0; }
+.talon-group { justify-content: flex-start; padding-left: 8px; }
+.discard-pile { justify-content: flex-end; padding-right: 8px; }
 .pile-label { color: var(--muted); font-size: 0.78em; text-align: center; white-space: nowrap; }
 .pile-label b { color: var(--ink); }
-.pile-spot { position: relative; width: 100%; height: 104px; }
+.pile-spot { position: relative; width: 128px; height: 96px; flex: none; }
 .stack-back { position: absolute; left: 50%; top: 50%; transition: opacity 0.3s; }
 #talon-spot .stack-back { transform: translate(calc(-50% + 12px), -50%); }
 #talon-spot .stack-back .card { box-shadow: -3px 3px 0 #5c0e18, -6px 6px 0 #45090f, 0 4px 10px rgba(0,0,0,0.4); }
@@ -224,8 +228,6 @@ input:focus, select:focus { outline: 2px solid var(--accent); }
 .pcard.sel .card { box-shadow: 0 0 0 3px var(--gold), 0 10px 20px rgba(0,0,0,0.45); }
 .pcard.dim .card { filter: grayscale(0.55) brightness(0.8); }
 .pcard.targetable .card { box-shadow: 0 0 0 2px rgba(229,181,58,0.6), 0 3px 8px rgba(0,0,0,0.35); }
-.pcard.marked { opacity: 0.55; }
-.pcard.marked .card { box-shadow: 0 0 0 3px var(--warn), 0 3px 8px rgba(0,0,0,0.35); }
 /* Unconfirmed defense card sitting on a slot (submitted by the Beat button) */
 .pcard.pending .card { box-shadow: 0 0 0 3px var(--gold), 0 8px 16px rgba(0,0,0,0.45); }
 
@@ -262,7 +264,9 @@ input:focus, select:focus { outline: 2px solid var(--accent); }
 .card .card-photo {
   position: absolute; inset: 3px;
   width: calc(100% - 6px); height: calc(100% - 6px);
-  object-fit: cover;
+  /* contain, not cover: the photos are narrower than the card box and
+   * cover-cropping cut the tops and bottoms off (piros most visibly). */
+  object-fit: contain;
   border-radius: 3px;
   pointer-events: none;
 }
@@ -321,7 +325,6 @@ input:focus, select:focus { outline: 2px solid var(--accent); }
   .opponents { gap: 8px; }
   .opp { width: 156px; height: 106px; padding: 6px 8px; }
   .opp .fan { max-width: 118px; height: 60px; }
-  .center-row { grid-template-columns: 108px 1fr 96px; }
-  .pile-spot { height: 76px; }
+  .pile-spot { width: 100px; height: 72px; }
   .hand-zone { height: 112px; }
 }
