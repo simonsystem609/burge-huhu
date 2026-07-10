@@ -226,6 +226,8 @@ input:focus, select:focus { outline: 2px solid var(--accent); }
 .pcard.targetable .card { box-shadow: 0 0 0 2px rgba(229,181,58,0.6), 0 3px 8px rgba(0,0,0,0.35); }
 .pcard.marked { opacity: 0.55; }
 .pcard.marked .card { box-shadow: 0 0 0 3px var(--warn), 0 3px 8px rgba(0,0,0,0.35); }
+/* Unconfirmed defense card sitting on a slot (submitted by the Beat button) */
+.pcard.pending .card { box-shadow: 0 0 0 3px var(--gold), 0 8px 16px rgba(0,0,0,0.45); }
 
 /* Side log */
 .sidelog {

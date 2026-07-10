@@ -62,24 +62,37 @@
   }
 
   function botDelay() {
-    return Number($('bot-speed').value) || 700;
+    return Number($('bot-speed').value) || 1200;
   }
 
   function gameMode() {
     return $('mode-select').value || 'finkel';
   }
 
+  // Stable per-browser identity (shared with the card game) — lets the
+  // server hold our seat across disconnects so a closed tab can resume.
+  function clientId() {
+    var id = localStorage.getItem('bh_client_id');
+    if (!id) {
+      id = (window.crypto && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : 'c' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+      localStorage.setItem('bh_client_id', id);
+    }
+    return id;
+  }
+
   // ── Menu ────────────────────────────────
   $('btn-single').onclick = function () {
-    socket.emit('singleplayer', { name: myName(), botDelayMs: botDelay(), mode: gameMode() });
+    socket.emit('singleplayer', { name: myName(), botDelayMs: botDelay(), mode: gameMode(), clientId: clientId() });
   };
   $('btn-create').onclick = function () {
-    socket.emit('createRoom', { name: myName(), botDelayMs: botDelay(), mode: gameMode() });
+    socket.emit('createRoom', { name: myName(), botDelayMs: botDelay(), mode: gameMode(), clientId: clientId() });
   };
   $('btn-join').onclick = function () {
     var code = ($('code-input').value || '').trim().toUpperCase();
     if (code.length < 4) return toast('Enter a room code');
-    socket.emit('joinRoom', { code: code, name: myName() });
+    socket.emit('joinRoom', { code: code, name: myName(), clientId: clientId() });
   };
   $('code-input').addEventListener('keydown', function (e) {
     if (e.key === 'Enter') $('btn-join').click();
@@ -89,12 +102,14 @@
     socket.emit('leaveRoom');
     showScreen('screen-menu');
   };
-  $('btn-back').onclick = function () {
-    window.location.href = '/';
-  };
-  $('btn-goto-cards').onclick = function () {
-    window.location.href = '/';
-  };
+  // Switching games is a deliberate exit: give up our seats first so the
+  // card page's auto-resume doesn't bounce us straight back here.
+  function gotoCards() {
+    socket.emit('abandon', { clientId: clientId() });
+    setTimeout(function () { window.location.href = '/'; }, 150);
+  }
+  $('btn-back').onclick = gotoCards;
+  $('btn-goto-cards').onclick = gotoCards;
   $('btn-rematch').onclick = function () { socket.emit('rematch'); };
   $('btn-menu').onclick = function () {
     $('overlay').classList.remove('show');
@@ -246,41 +261,6 @@
     $('move-phantom-piece').style.display = 'none';
   }
 
-  function findBoardPos(view, player, piece) {
-    if (!view || !view.board) return null;
-    for (var pos in view.board) {
-      var occs = view.board[pos];
-      for (var i = 0; i < occs.length; i++) {
-        if (occs[i].player === player && occs[i].piece === piece) return parseInt(pos, 10);
-      }
-    }
-    return null;
-  }
-
-  // A piece that just bore off steps from its last square into the margin
-  // beside the board — a "finish square" just outside the board proper.
-  function animateBearOff(player, fromPos) {
-    var sqEl = document.querySelector('.sq[data-pos="' + fromPos + '"]');
-    if (!sqEl) return;
-    var r = sqEl.getBoundingClientRect();
-    var target = marginPoint(r);
-
-    var tok = document.createElement('div');
-    tok.className = 'bearoff-token p' + player;
-    tok.style.left = (r.left + r.width / 2) + 'px';
-    tok.style.top = (r.top + r.height / 2) + 'px';
-    document.body.appendChild(tok);
-
-    requestAnimationFrame(function () {
-      tok.style.left = target.x + 'px';
-      tok.style.top = target.y + 'px';
-      tok.style.opacity = '0';
-      tok.style.transform = 'translate(-50%, -50%) scale(0.5)';
-    });
-
-    setTimeout(function () { tok.remove(); }, 700);
-  }
-
   // ── Dice roll animation ──────────────────
   // 4 tetrahedral dice, top view: each die shows a white pip when its marked
   // tip lands up; the roll is how many pips show. The dice tumble in the
@@ -377,40 +357,131 @@
 
   // ── Render ──────────────────────────────
   function renderBoard(view) {
-    var board = $('board');
-    board.innerHTML = '';
-
+    // Squares are static per game; pieces live in a separate layer and are
+    // moved with CSS transitions so every move animates — bots included.
+    ensureBoardLayers();
     POSITIONS.forEach(function (p) {
-      var sq = document.createElement('div');
-      sq.className = 'sq';
-      if (ROSETTES.has(p.id)) sq.classList.add('rosette');
-      else if (SHARED.has(p.id)) sq.classList.add('shared');
-      else sq.classList.add('safe');
-
+      var sq = document.querySelector('#squares .sq[data-pos="' + p.id + '"]');
+      if (!sq) return;
+      sq.classList.toggle('rosette', ROSETTES.has(p.id));
+      sq.classList.toggle('shared', !ROSETTES.has(p.id) && SHARED.has(p.id));
+      sq.classList.toggle('safe', !ROSETTES.has(p.id) && !SHARED.has(p.id));
       // Only the entry square for a NEW piece is highlighted up front;
       // destinations for pieces already on the board appear when the
       // player clicks one of their pieces.
-      if (entryMove && entryMove.destPos === p.id) sq.classList.add('legal-dest');
+      sq.classList.toggle('legal-dest', !!(entryMove && entryMove.destPos === p.id));
+    });
+    renderPieces(view);
+  }
 
-      // Percentage-based absolute positioning
+  var boardLayersBuilt = false;
+  function ensureBoardLayers() {
+    if (boardLayersBuilt) return;
+    var board = $('board');
+    board.innerHTML = '<div id="squares"></div><div id="piece-layer"></div>';
+    var wrap = document.getElementById('squares');
+    POSITIONS.forEach(function (p) {
+      var sq = document.createElement('div');
+      sq.className = 'sq';
       sq.style.left = p.left + '%';
       sq.style.top = p.top + '%';
       sq.style.width = p.w + '%';
       sq.style.height = p.h + '%';
       sq.setAttribute('data-pos', p.id);
-
-      // Pieces
-      if (view.board && view.board[p.id]) {
-        view.board[p.id].forEach(function (occ) {
-          var piece = document.createElement('div');
-          piece.className = 'piece p' + occ.player;
-          if (occ.player === view.you) piece.classList.add('mine');
-          sq.appendChild(piece);
-        });
-      }
-
-      board.appendChild(sq);
+      wrap.appendChild(sq);
     });
+    boardLayersBuilt = true;
+  }
+
+  // Centre of each square in board-percent coordinates.
+  var POS_CENTER = {};
+  POSITIONS.forEach(function (p) {
+    POS_CENTER[p.id] = { x: p.left + p.w / 2, y: p.top + p.h / 2 };
+  });
+
+  // Home stack in the margin beside the player's own lane (player 0 owns the
+  // right column, player 1 the left); borne-off pieces exit near the top.
+  function homePct(player, slot) {
+    return { x: player === 0 ? 109 : -9, y: 92 - slot * 6.5 };
+  }
+  function exitPct(player) {
+    return { x: player === 0 ? 109 : -9, y: 7 };
+  }
+
+  var oppMemory = { state: {}, offCount: 0 }; // inferred opponent piece states
+
+  function getPieceEl(key, playerClass) {
+    var layer = document.getElementById('piece-layer');
+    var el = layer.querySelector('[data-key="' + key + '"]');
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'gpiece ' + playerClass;
+      el.setAttribute('data-key', key);
+      layer.appendChild(el);
+    }
+    return el;
+  }
+
+  function placePiece(el, pct, hidden) {
+    el.style.left = pct.x + '%';
+    el.style.top = pct.y + '%';
+    el.style.opacity = hidden ? '0' : '1';
+  }
+
+  function renderPieces(view) {
+    var me = view.you;
+    var opp = 1 - me;
+    var count = view.pieceCount || 7;
+    var layer = document.getElementById('piece-layer');
+
+    var offNow = view.opponent ? view.opponent.offCount || 0 : 0;
+    var fresh =
+      view.pieces.every(function (p) { return p.step === -1; }) &&
+      (!view.board || Object.keys(view.board).length === 0) &&
+      offNow === 0;
+    if (fresh) {
+      layer.innerHTML = '';
+      oppMemory = { state: {}, offCount: 0 };
+    }
+
+    // My pieces — identity is exact (step per piece index).
+    var myHomeSlot = 0;
+    view.pieces.forEach(function (ps, i) {
+      var el = getPieceEl('m' + i, 'p' + me + ' mine');
+      if (ps.step === -1) placePiece(el, homePct(me, myHomeSlot++));
+      else if (ps.step >= view.path.length) placePiece(el, exitPct(me), true);
+      else placePiece(el, POS_CENTER[view.path[ps.step]]);
+    });
+
+    // Opponent pieces — board gives identity; home vs borne-off is inferred
+    // from the off-count delta (one move happens per view).
+    var onBoard = {};
+    if (view.board) {
+      Object.keys(view.board).forEach(function (pos) {
+        view.board[pos].forEach(function (occ) {
+          if (occ.player === opp) onBoard[occ.piece] = Number(pos);
+        });
+      });
+    }
+    var offDelta = offNow - oppMemory.offCount;
+    var oppHomeSlot = 0;
+    for (var i2 = 0; i2 < count; i2++) {
+      var el2 = getPieceEl('o' + i2, 'p' + opp);
+      if (onBoard[i2] != null) {
+        oppMemory.state[i2] = 'board';
+        placePiece(el2, POS_CENTER[onBoard[i2]]);
+      } else {
+        if (oppMemory.state[i2] === 'board') {
+          if (offDelta > 0) { oppMemory.state[i2] = 'off'; offDelta--; }
+          else oppMemory.state[i2] = 'home';
+        } else if (!oppMemory.state[i2]) {
+          oppMemory.state[i2] = 'home';
+        }
+        if (oppMemory.state[i2] === 'off') placePiece(el2, exitPct(opp), true);
+        else placePiece(el2, homePct(opp, oppHomeSlot++));
+      }
+    }
+    oppMemory.offCount = offNow;
   }
 
   function homeDots(n, total) {
@@ -438,22 +509,9 @@
   }
 
   function render(view) {
-    var prevView = lastView;
     lastView = view;
     if (view.rosettes) ROSETTES = new Set(view.rosettes);
     clearPendingMove();
-
-    // Detect pieces that just bore off (while their old square is still in
-    // the DOM) and animate them stepping off into the finish margin.
-    if (prevView && view.log) {
-      var prevMaxT = (prevView.log && prevView.log.length) ? prevView.log[prevView.log.length - 1].t : 0;
-      view.log.forEach(function (entry) {
-        if (entry.t > prevMaxT && entry.key === 'bearOff') {
-          var fromPos = findBoardPos(prevView, entry.params.player, entry.params.piece);
-          if (fromPos !== null) animateBearOff(entry.params.player, fromPos);
-        }
-      });
-    }
 
     if (view.phase === 'move' && view.turn === view.you) {
       legalMoveMap = computeLegalMoves(view);
@@ -637,11 +695,17 @@
   });
   socket.on('leftRoom', function () { showScreen('screen-menu'); });
   socket.on('joined', function () {});
+  socket.on('resumed', function () { toast('Reconnected — the game picks up where you left it.'); });
+  // Our unfinished room lives in the card game — go there and resume.
+  socket.on('resumeElsewhere', function (d) {
+    if (d && d.game === 'cards') window.location.href = '/';
+  });
 
   socket.on('disconnect', function () { toast('Connection lost. Reconnecting...'); });
 
   // A ?join=CODE in the URL (arriving from the card game's redirect) joins
-  // that room as soon as the socket is up.
+  // that room as soon as the socket is up; otherwise ask the server whether
+  // this browser has a seat to come back to.
   var pendingJoin = null;
   var joinParam = new URLSearchParams(window.location.search).get('join');
   if (joinParam) {
@@ -653,8 +717,10 @@
     if (pendingJoin) {
       var code = pendingJoin;
       pendingJoin = null;
-      socket.emit('joinRoom', { code: code, name: myName() });
+      socket.emit('joinRoom', { code: code, name: myName(), clientId: clientId() });
+      return;
     }
+    socket.emit('resume', { clientId: clientId() });
   });
 
   // ── Init ────────────────────────────────

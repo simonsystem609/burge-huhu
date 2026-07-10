@@ -82,6 +82,8 @@ function driveBots(code) {
   setTimeout(() => {
     const r = rm.getRoom(code);
     if (!r || !r.game || r.game.phase === 'over') return;
+    // Pause while nobody is watching — the game resumes with the player.
+    if (!r.seats.some((st) => st.socketId)) return;
     const a = currentActor(r.game);
     if (!a) return;
     const s = r.seats[a.player];
@@ -105,18 +107,20 @@ function seatIndexOf(room, socketId) {
 // ── Socket handlers ───────────────────────────────────────────────────────
 
 io.on('connection', (socket) => {
-  socket.on('createRoom', ({ name, lang, botDelayMs } = {}) => {
+  socket.on('createRoom', ({ name, lang, botDelayMs, clientId } = {}) => {
     const existing = rm.findRoomBySocket(socket.id);
     if (existing) return socket.emit('errorMsg', 'already_in_room');
-    const room = rm.createRoom(socket.id, name, lang || 'hu');
+    rm.forgetClient(clientId); // starting fresh abandons any stale seat
+    const room = rm.createRoom(socket.id, clientId, name, lang || 'hu');
     room.botDelay = Number(botDelayMs) || DEFAULT_BOT_DELAY;
     socket.emit('joined', { code: room.code });
     emitLobby(room);
   });
 
-  socket.on('joinRoom', ({ code, name } = {}) => {
+  socket.on('joinRoom', ({ code, name, clientId } = {}) => {
     const clean = String(code || '').trim().toUpperCase();
-    const res = rm.joinRoom(clean, socket.id, name);
+    rm.forgetClient(clientId);
+    const res = rm.joinRoom(clean, socket.id, clientId, name);
     if (res.error) {
       if (res.error === 'no_room' && urRooms.has(clean)) {
         return socket.emit('wrongGame', { game: 'ur', code: clean });
@@ -127,10 +131,11 @@ io.on('connection', (socket) => {
     emitLobby(res.room);
   });
 
-  socket.on('singleplayer', ({ name, lang, bots, botDelayMs } = {}) => {
+  socket.on('singleplayer', ({ name, lang, bots, botDelayMs, clientId } = {}) => {
     const existing = rm.findRoomBySocket(socket.id);
     if (existing) return socket.emit('errorMsg', 'already_in_room');
-    const room = rm.createRoom(socket.id, name, lang || 'hu', { single: true });
+    rm.forgetClient(clientId);
+    const room = rm.createRoom(socket.id, clientId, name, lang || 'hu', { single: true });
     room.botDelay = Number(botDelayMs) || DEFAULT_BOT_DELAY;
     const botCount = Math.min(Math.max(Number(bots) || 1, 1), MAX_SEATS - 1);
     for (let i = 0; i < botCount; i++) rm.addBot(room);
@@ -199,7 +204,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('leaveRoom', () => {
-    const info = rm.handleDisconnect(socket.id);
+    const info = rm.leaveRoom(socket.id);
     if (info && info.room && !info.ended) {
       if (info.room.started) emitGame(info.room);
       else emitLobby(info.room);
@@ -210,7 +215,7 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     const info = rm.handleDisconnect(socket.id);
-    if (info && info.room && !info.ended) {
+    if (info && info.room && !info.paused) {
       if (info.room.started) {
         emitGame(info.room);
         driveBots(info.room.code);
@@ -220,21 +225,41 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('rejoin', ({ code, oldSid } = {}) => {
-    let room = rm.getRoom(String(code || '').trim().toUpperCase());
-    // A failed auto-rejoin is not the user's doing — fail silently so the
-    // client just clears its stored room instead of showing "no such room".
-    if (!room) return socket.emit('rejoinFailed');
-    const seat = rm.rejoinRoom(room, socket.id, oldSid);
-    if (!seat) {
-      const res = rm.joinRoom(room.code, socket.id, '');
-      if (res.error) return socket.emit('rejoinFailed');
-      room = res.room;
+  // Deliberate exit (switching games): give up every seat this browser
+  // holds in BOTH games so resume won't drag it back.
+  socket.on('abandon', ({ clientId } = {}) => {
+    const info = rm.leaveRoom(socket.id);
+    if (info && info.room && !info.ended) {
+      if (info.room.started) {
+        emitGame(info.room);
+        driveBots(info.room.code);
+      } else {
+        emitLobby(info.room);
+      }
     }
-    socket.emit('rejoined', { code: room.code });
-    if (room.started) emitGame(room);
-    else emitLobby(room);
-    if (room.started) driveBots(room.code);
+    rm.forgetClient(clientId);
+    urForgetClient(clientId);
+  });
+
+  // A returning browser: reattach it to whatever seat its clientId holds —
+  // singleplayer, waiting lobby or a live game — or point it at the other
+  // game if that's where its room lives.
+  socket.on('resume', ({ clientId } = {}) => {
+    const res = rm.resumeClient(clientId, socket.id);
+    if (!res) {
+      if (urFindSeatByClient(clientId)) {
+        socket.emit('resumeElsewhere', { game: 'ur' });
+      }
+      return; // nothing to resume — stay quiet
+    }
+    const room = res.room;
+    socket.emit('resumed', { code: room.code });
+    if (room.started) {
+      emitGame(room);
+      driveBots(room.code);
+    } else {
+      emitLobby(room);
+    }
   });
 });
 
@@ -307,6 +332,8 @@ function urDriveBots(code) {
   setTimeout(() => {
     const r = urRooms.get(code);
     if (!r || !r.game || r.game.phase === 'over') return;
+    // Pause while nobody is watching — resumes with the player.
+    if (!r.seats.some((st) => st.socketId)) return;
     const a = urEngine.currentActor(r.game);
     if (!a) return;
     const s = r.seats[a.player];
@@ -345,7 +372,38 @@ function urDriveBots(code) {
       urEmitGame(r);
       urDriveBots(code);
     }
-  }, room.botDelay || 700);
+  }, room.botDelay || 1100);
+}
+
+// Seats (possibly disconnected) held by a returning client, across UR rooms.
+function urFindSeatByClient(clientId) {
+  if (!clientId) return null;
+  for (const [code, room] of urRooms) {
+    const seat = room.seats.find((s) => s.clientId === clientId && !s.socketId);
+    if (seat) return { code, room, seat };
+  }
+  return null;
+}
+
+// Starting fresh abandons any stale UR seat this client still holds.
+function urForgetClient(clientId) {
+  if (!clientId) return;
+  for (const [code, room] of urRooms) {
+    const seat = room.seats.find((s) => s.clientId === clientId && !s.socketId);
+    if (!seat) continue;
+    if (room.game) {
+      seat.clientId = null;
+      seat.isBot = true;
+      if (room.game.players[seat.playerIdx]) room.game.players[seat.playerIdx].isBot = true;
+    } else {
+      room.seats = room.seats.filter((s) => s !== seat);
+      room.seats.forEach((s, i) => { s.playerIdx = i; });
+    }
+    if (!room.seats.some((s) => s.socketId)) {
+      if (room.seats.length === 0) urRooms.delete(code);
+      else if (!room.emptySince) room.emptySince = Date.now();
+    }
+  }
 }
 
 urIo.on('connection', (socket) => {
@@ -357,22 +415,26 @@ urIo.on('connection', (socket) => {
     return urEngine.MODES[mode] ? mode : 'finkel';
   }
 
-  socket.on('createRoom', ({ name, botDelayMs, mode } = {}) => {
+  socket.on('createRoom', ({ name, botDelayMs, mode, clientId } = {}) => {
+    urForgetClient(clientId);
     const code = urMakeCode();
     const room = {
       code,
       hostId: socket.id,
+      hostClientId: clientId || null,
       mode: urCleanMode(mode),
-      botDelay: Number(botDelayMs) || 700,
-      seats: [{ name: name || 'Player', isBot: false, socketId: socket.id, playerIdx: 0 }],
+      botDelay: Number(botDelayMs) || 1100,
+      seats: [{ name: name || 'Player', isBot: false, socketId: socket.id, clientId: clientId || null, playerIdx: 0 }],
       game: null,
+      emptySince: null,
     };
     urRooms.set(code, room);
     socket.emit('joined', { code });
     urEmitLobby(room);
   });
 
-  socket.on('joinRoom', ({ code, name } = {}) => {
+  socket.on('joinRoom', ({ code, name, clientId } = {}) => {
+    urForgetClient(clientId);
     const clean = String(code || '').trim().toUpperCase();
     const room = urRooms.get(clean);
     if (!room) {
@@ -384,28 +446,32 @@ urIo.on('connection', (socket) => {
     }
     if (room.seats.length >= 2) return socket.emit('errorMsg', 'Room full');
     if (room.game) return socket.emit('errorMsg', 'Game in progress');
-    room.seats.push({ name: name || 'Player', isBot: false, socketId: socket.id, playerIdx: 1 });
+    room.seats.push({ name: name || 'Player', isBot: false, socketId: socket.id, clientId: clientId || null, playerIdx: 1 });
+    room.emptySince = null;
     socket.emit('joined', { code: clean });
     urEmitLobby(room);
   });
 
-  socket.on('singleplayer', ({ name, botDelayMs, mode } = {}) => {
+  socket.on('singleplayer', ({ name, botDelayMs, mode, clientId } = {}) => {
+    urForgetClient(clientId);
     const code = urMakeCode();
     const cleanMode = urCleanMode(mode);
     const room = {
       code,
       hostId: socket.id,
+      hostClientId: clientId || null,
       mode: cleanMode,
-      botDelay: Number(botDelayMs) || 700,
+      botDelay: Number(botDelayMs) || 1100,
       seats: [
-        { name: name || 'You', isBot: false, socketId: socket.id, playerIdx: 0 },
-        { name: 'Bot', isBot: true, socketId: null, playerIdx: 1 },
+        { name: name || 'You', isBot: false, socketId: socket.id, clientId: clientId || null, playerIdx: 0 },
+        { name: 'Bot', isBot: true, socketId: null, clientId: null, playerIdx: 1 },
       ],
       game: urEngine.createGame(
         [{ id: 'p0', name: name || 'You', isBot: false }, { id: 'p1', name: 'Bot', isBot: true }],
         undefined,
         cleanMode
       ),
+      emptySince: null,
     };
     urRooms.set(code, room);
     socket.emit('joined', { code });
@@ -470,10 +536,9 @@ urIo.on('connection', (socket) => {
     urDriveBots(room.code);
   });
 
-  // A human leaving or disconnecting: mid-game their seat is taken over by a
-  // bot so the other player can keep playing; in the lobby the seat is simply
-  // removed. The room is only dropped once no connected humans remain.
-  function urDropPlayer(socketId) {
+  // Explicit leave: the seat is given up for good — bot takes over mid-game
+  // (no resume claim), lobby seat is removed, empty rooms die immediately.
+  function urLeave(socketId) {
     const entry = [...urRooms.entries()].find(([, r]) =>
       r.seats.some((s) => s.socketId === socketId));
     if (!entry) return;
@@ -481,6 +546,7 @@ urIo.on('connection', (socket) => {
     const seat = room.seats.find((s) => s.socketId === socketId);
     if (seat) {
       seat.socketId = null;
+      seat.clientId = null;
       if (room.game) {
         seat.isBot = true;
         if (room.game.players[seat.playerIdx]) room.game.players[seat.playerIdx].isBot = true;
@@ -491,7 +557,9 @@ urIo.on('connection', (socket) => {
       return;
     }
     if (room.hostId === socketId) {
-      room.hostId = room.seats.find((s) => s.socketId).socketId;
+      const next = room.seats.find((s) => s.socketId);
+      room.hostId = next.socketId;
+      room.hostClientId = next.clientId || null;
     }
     if (room.game) {
       urEmitGame(room);
@@ -503,9 +571,82 @@ urIo.on('connection', (socket) => {
     }
   }
 
+  // Connection dropped: keep the player's place. With another human still
+  // connected a bot fills in (game) or the seat is freed (lobby); with
+  // nobody left the room simply pauses and waits out the grace period.
+  function urDisconnect(socketId) {
+    const entry = [...urRooms.entries()].find(([, r]) =>
+      r.seats.some((s) => s.socketId === socketId));
+    if (!entry) return;
+    const [code, room] = entry;
+    const seat = room.seats.find((s) => s.socketId === socketId);
+    if (!seat) return;
+    seat.socketId = null;
+
+    const othersConnected = room.seats.some((s) => s.socketId);
+    if (!othersConnected) {
+      room.emptySince = Date.now();
+      return; // paused — bots stop via the urDriveBots guard
+    }
+
+    if (room.hostId === socketId) {
+      const next = room.seats.find((s) => s.socketId);
+      room.hostId = next.socketId;
+      room.hostClientId = next.clientId || null;
+    }
+    if (room.game) {
+      seat.isBot = true;
+      if (room.game.players[seat.playerIdx]) room.game.players[seat.playerIdx].isBot = true;
+      urEmitGame(room);
+      urDriveBots(code);
+    } else {
+      room.seats = room.seats.filter((s) => s.socketId);
+      room.seats.forEach((s, i) => { s.playerIdx = i; });
+      urEmitLobby(room);
+    }
+  }
+
   socket.on('leaveRoom', () => {
-    urDropPlayer(socket.id);
+    urLeave(socket.id);
     socket.emit('leftRoom');
+  });
+
+  // Deliberate exit (switching games): drop every seat in both games.
+  socket.on('abandon', ({ clientId } = {}) => {
+    urLeave(socket.id);
+    urForgetClient(clientId);
+    rm.forgetClient(clientId);
+  });
+
+  socket.on('resume', ({ clientId } = {}) => {
+    const found = urFindSeatByClient(clientId);
+    if (!found) {
+      const cardRoom = rm.findRoomByClient(clientId);
+      if (cardRoom && cardRoom.seats.some((s) => s.clientId === clientId && !s.socketId)) {
+        socket.emit('resumeElsewhere', { game: 'cards' });
+      }
+      return;
+    }
+    const { code, room, seat } = found;
+    seat.socketId = socket.id;
+    if (seat.isBot) {
+      seat.isBot = false;
+      if (room.game && room.game.players[seat.playerIdx]) {
+        room.game.players[seat.playerIdx].isBot = false;
+      }
+    }
+    if (room.hostClientId === clientId || !room.seats.some((s) => s.socketId === room.hostId)) {
+      room.hostId = socket.id;
+      if (!room.hostClientId) room.hostClientId = clientId;
+    }
+    room.emptySince = null;
+    socket.emit('resumed', { code });
+    if (room.game) {
+      urEmitGame(room);
+      urDriveBots(code);
+    } else {
+      urEmitLobby(room);
+    }
   });
 
   socket.on('rematch', () => {
@@ -522,9 +663,21 @@ urIo.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    urDropPlayer(socket.id);
+    urDisconnect(socket.id);
   });
 });
+
+// Sweep rooms nobody has come back to within the grace period.
+setInterval(() => {
+  rm.sweep();
+  const now = Date.now();
+  for (const [code, room] of urRooms) {
+    if (!room.seats.some((s) => s.socketId)) {
+      if (!room.emptySince) room.emptySince = now;
+      if (now - room.emptySince > 15 * 60 * 1000) urRooms.delete(code);
+    }
+  }
+}, 60 * 1000);
 
 process.on('uncaughtException', (err) => {
   console.error('Uncaught exception:', err);

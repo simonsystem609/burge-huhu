@@ -84,6 +84,19 @@
     return n || (lang === 'hu' ? 'Játékos' : 'Player');
   }
 
+  // Stable per-browser identity (shared with the UR game) — the server uses
+  // it to hold our seat across disconnects so a closed tab can resume.
+  function clientId() {
+    let id = localStorage.getItem('bh_client_id');
+    if (!id) {
+      id = window.crypto && crypto.randomUUID
+        ? crypto.randomUUID()
+        : 'c' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+      localStorage.setItem('bh_client_id', id);
+    }
+    return id;
+  }
+
   function myBotDelay() {
     return Number(localStorage.getItem('burge_bot_ms')) || 800;
   }
@@ -94,15 +107,22 @@
       lang,
       bots: Number($('bot-count').value),
       botDelayMs: myBotDelay(),
+      clientId: clientId(),
     });
-  $('btn-create').onclick = () => socket.emit('createRoom', { name: myName(), lang, botDelayMs: myBotDelay() });
+  $('btn-create').onclick = () =>
+    socket.emit('createRoom', { name: myName(), lang, botDelayMs: myBotDelay(), clientId: clientId() });
+  // Switching games is a deliberate exit: give up our seats first so the
+  // UR page's auto-resume doesn't bounce us straight back here.
   $('btn-goto-ur').onclick = () => {
-    window.location.href = '/ur/';
+    socket.emit('abandon', { clientId: clientId() });
+    setTimeout(() => {
+      window.location.href = '/ur/';
+    }, 150);
   };
   $('btn-join').onclick = () => {
     const code = ($('code-input').value || '').trim().toUpperCase();
     if (code.length < 4) return toast(t(lang, 'err_no_room'));
-    socket.emit('joinRoom', { code, name: myName() });
+    socket.emit('joinRoom', { code, name: myName(), clientId: clientId() });
   };
   $('code-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') $('btn-join').click();
@@ -177,7 +197,10 @@
   let staged = new Set(); // my cards staged for an attack (client-side only)
   let markedPickup = new Set(); // table slot indices I've given up on
   let selectedDef = null; // hand card selected to defend with (click flow)
-  let takeSent = false; // guard: auto-take emitted once per view
+  // Local (unconfirmed) defense assignments: slot index -> hand card placed
+  // on it. Nothing is sent to the server until the Beat button confirms, so
+  // the player can freely swap cards around or change their mind.
+  let pendingDef = new Map();
 
   function clearSceneTimers() {
     timers.forEach(clearTimeout);
@@ -192,6 +215,7 @@
     discarding.clear();
     staged.clear();
     markedPickup.clear();
+    pendingDef.clear();
     selectedDef = null;
   }
 
@@ -236,7 +260,7 @@
       els.delete(key);
     }
   }
-  const STATE_CLASSES = ['clickable', 'dim', 'sel', 'staged', 'targetable', 'marked'];
+  const STATE_CLASSES = ['clickable', 'dim', 'sel', 'staged', 'targetable', 'marked', 'pending'];
   function stripStateClasses(el) {
     STATE_CLASSES.forEach((c) => el.classList.remove(c));
   }
@@ -526,20 +550,18 @@
       $('btn-attack').textContent =
         t(lang, 'attackBtn') + (selection.length > 0 ? ` (${selection.length})` : '');
     }
+    const myDefense = view.yourTurn && view.phase === 'defense';
+    $('btn-beat').style.display = myDefense && view.table.slots.length > 0 ? '' : 'none';
+    if (myDefense) $('btn-beat').disabled = !defenseComplete(view);
     $('btn-swap7').style.display = view.legal.some((m) => m.type === 'swap7') ? '' : 'none';
   }
 
-  // Once every table card is beaten (server-side) or marked for pickup
-  // (client-side), submit `take` automatically — no extra button.
-  function autoTakeCheck(view) {
-    if (!(view.yourTurn && view.phase === 'defense')) return;
-    if (view.table.slots.length === 0 || takeSent) return;
-    const all = view.table.slots.every((slot, i) => slot.defense != null || markedPickup.has(i));
-    if (all) {
-      takeSent = true;
-      markedPickup.clear();
-      socket.emit('move', { move: { type: 'take' } });
-    }
+  // Every open slot is dealt with (a card placed on it, or marked for
+  // pickup) — only then can the Beat button confirm the whole defense.
+  function defenseComplete(view) {
+    return view.table.slots.every(
+      (slot, i) => slot.defense != null || pendingDef.has(i) || markedPickup.has(i)
+    );
   }
 
   // ── Settle: reconcile the scene with a view (idempotent) ─────────
@@ -575,7 +597,17 @@
     if (!(view.yourTurn && view.phase === 'attack')) staged.clear();
     if (!(view.yourTurn && view.phase === 'defense')) {
       markedPickup.clear();
+      pendingDef.clear();
       selectedDef = null;
+    } else {
+      [...pendingDef.entries()].forEach(([slot, card]) => {
+        const sl = view.table.slots[slot];
+        if (!sl || sl.defense != null || !view.hand.includes(card)) pendingDef.delete(slot);
+      });
+      [...markedPickup].forEach((i) => {
+        const sl = view.table.slots[i];
+        if (!sl || sl.defense != null) markedPickup.delete(i);
+      });
     }
 
     const myAttack = view.yourTurn && view.phase === 'attack';
@@ -587,7 +619,8 @@
     // Desired placement of every known (face-up) card.
     const want = new Map();
     const handIds = sortHand(view);
-    const inHand = handIds.filter((c) => !staged.has(c));
+    const assignedCards = new Set(pendingDef.values());
+    const inHand = handIds.filter((c) => !staged.has(c) && !assignedCards.has(c));
     const stagedArr = handIds.filter((c) => staged.has(c));
 
     inHand.forEach((c, i) => {
@@ -617,7 +650,7 @@
         kind: 'attack',
         slot: i,
         cls: {
-          targetable: myDefense && open && !markedPickup.has(i),
+          targetable: myDefense && open && !markedPickup.has(i) && !pendingDef.has(i),
           marked: markedPickup.has(i),
           clickable: myDefense && open,
         },
@@ -630,6 +663,16 @@
           cls: {},
         });
       }
+    });
+
+    // Locally assigned (unconfirmed) defense cards sit on their slots.
+    pendingDef.forEach((card, slot) => {
+      want.set(card, {
+        pos: slotPos(a, s, slot, nSlots, 'defense'),
+        kind: 'pending-def',
+        slot,
+        cls: { pending: true, clickable: true },
+      });
     });
 
     if (!view.trumpPicked) {
@@ -684,7 +727,6 @@
       });
     });
 
-    autoTakeCheck(view);
   }
 
   // ── Choreography: deal, exchange, refill ─────────────────────────
@@ -867,7 +909,6 @@
     clearSceneTimers();
     const prev = sceneView;
     sceneView = view;
-    takeSent = false;
     showScreen('screen-game');
 
     const steps = [];
@@ -947,7 +988,20 @@
     // still animate (transform transitions) but skip the step-by-step timing.
     const quick = animQueue.length >= 3;
     const view = animQueue[0];
-    const dur = syncScene(view, quick);
+    let dur = 0;
+    try {
+      dur = syncScene(view, quick);
+    } catch (err) {
+      // A rendering hiccup must never wedge the queue — recover to the
+      // authoritative state and keep consuming views.
+      console.error('render error', err);
+      try {
+        sceneView = view;
+        settle(view, true);
+      } catch (_) {
+        /* state will heal on the next view */
+      }
+    }
     animTimer = setTimeout(() => {
       animQueue.shift();
       dequeueViews();
@@ -964,8 +1018,8 @@
     const kind = el.getAttribute('data-kind');
     const card = el.getAttribute('data-card');
     if (!card) return;
-    if (kind !== 'hand' && kind !== 'staged' && kind !== 'attack') return;
-    if (kind === 'attack' && sceneView.phase !== 'defense') return;
+    if (kind !== 'hand' && kind !== 'staged' && kind !== 'attack' && kind !== 'pending-def') return;
+    if ((kind === 'attack' || kind === 'pending-def') && sceneView.phase !== 'defense') return;
     drag = {
       el,
       card,
@@ -1037,9 +1091,16 @@
     $('my-hand').classList.remove('drop-return');
   }
 
-  function emitDefend(mv) {
-    markedPickup.delete(mv.slot);
-    socket.emit('move', { move: mv });
+  // Place a hand card on a slot locally (unconfirmed — Beat submits it).
+  function assignDefense(slot, card) {
+    pendingDef.set(slot, card);
+    markedPickup.delete(slot);
+    selectedDef = null;
+    settle(sceneView, false);
+  }
+  function unassignDefense(slot) {
+    pendingDef.delete(slot);
+    settle(sceneView, false);
   }
 
   function handleClick(d) {
@@ -1051,17 +1112,20 @@
     } else if (d.kind === 'staged') {
       staged.delete(d.card);
       settle(view, false);
+    } else if (d.kind === 'pending-def') {
+      unassignDefense(Number(d.slot));
     } else if (d.kind === 'hand' && view.phase === 'defense') {
       const moves = view.legal.filter(
         (m) =>
           m.type === 'defend' &&
           m.card === d.card &&
           !markedPickup.has(m.slot) &&
+          !pendingDef.has(m.slot) &&
           view.table.slots[m.slot] &&
           view.table.slots[m.slot].defense == null
       );
       if (moves.length === 0) return toast(t(lang, 'err_does_not_beat'));
-      if (moves.length === 1) return emitDefend(moves[0]);
+      if (moves.length === 1) return assignDefense(moves[0].slot, d.card);
       selectedDef = selectedDef === d.card ? null : d.card;
       settle(view, false);
     } else if (d.kind === 'attack' && view.phase === 'defense') {
@@ -1071,11 +1135,13 @@
         const mv = view.legal.find(
           (m) => m.type === 'defend' && m.card === selectedDef && m.slot === slotIdx
         );
+        const card = selectedDef;
         selectedDef = null;
-        if (mv) return emitDefend(mv);
+        if (mv) return assignDefense(slotIdx, card);
         settle(view, false);
         return toast(t(lang, 'err_does_not_beat'));
       }
+      if (pendingDef.has(slotIdx)) return unassignDefense(slotIdx);
       if (markedPickup.has(slotIdx)) markedPickup.delete(slotIdx);
       else markedPickup.add(slotIdx);
       settle(view, false);
@@ -1103,19 +1169,29 @@
       return;
     }
     if (d.kind === 'hand' && view.phase === 'defense') {
-      const n = view.table.slots.length;
-      let best = null;
-      view.table.slots.forEach((slot, i) => {
-        if (slot.defense != null) return;
-        const p = slotPos(a, s, i, n, 'attack');
-        const dist = Math.hypot(p.x - px, p.y - py);
-        if (dist < CW * s * 1.2 && (!best || dist < best.dist)) best = { i, dist };
-      });
-      if (best) {
+      const target = nearestOpenSlot(view, a, s, px, py);
+      if (target != null) {
         const mv = view.legal.find(
-          (m) => m.type === 'defend' && m.card === d.card && m.slot === best.i
+          (m) => m.type === 'defend' && m.card === d.card && m.slot === target
         );
-        if (mv) return emitDefend(mv);
+        if (mv) return assignDefense(target, d.card);
+        toast(t(lang, 'err_does_not_beat'));
+      }
+      settle(view, false);
+      return;
+    }
+    if (d.kind === 'pending-def') {
+      const oldSlot = Number(d.slot);
+      if (!aboveHand) return unassignDefense(oldSlot);
+      const target = nearestOpenSlot(view, a, s, px, py);
+      if (target != null && target !== oldSlot) {
+        const mv = view.legal.find(
+          (m) => m.type === 'defend' && m.card === d.card && m.slot === target
+        );
+        if (mv) {
+          pendingDef.delete(oldSlot);
+          return assignDefense(target, d.card);
+        }
         toast(t(lang, 'err_does_not_beat'));
       }
       settle(view, false);
@@ -1125,6 +1201,7 @@
       if (!aboveHand) {
         const slotIdx = Number(d.slot);
         if (view.table.slots[slotIdx] && view.table.slots[slotIdx].defense == null) {
+          pendingDef.delete(slotIdx);
           markedPickup.add(slotIdx);
         }
       }
@@ -1134,6 +1211,20 @@
     settle(view, false);
   }
 
+  // Nearest slot (by its attack-card position) that is still open on the
+  // server, within grabbing distance of the drop point.
+  function nearestOpenSlot(view, a, s, px, py) {
+    const n = view.table.slots.length;
+    let best = null;
+    view.table.slots.forEach((slot, i) => {
+      if (slot.defense != null) return;
+      const p = slotPos(a, s, i, n, 'attack');
+      const dist = Math.hypot(p.x - px, p.y - py);
+      if (dist < CW * s * 1.2 && (!best || dist < best.dist)) best = { i, dist };
+    });
+    return best ? best.i : null;
+  }
+
   // ── Game actions ─────────────────────────────────────────────────
   $('btn-attack').onclick = () => {
     if (!sceneView) return;
@@ -1141,6 +1232,23 @@
     const legalMatch = sceneView.legal.find((m) => m.type === 'attack' && sameSet(m.cards, selection));
     if (!legalMatch) return toast(t(lang, 'err_bad_set'));
     socket.emit('move', { move: { type: 'attack', cards: legalMatch.cards } });
+  };
+  // Confirm the whole defense at once: submit each placed card, then take
+  // whatever was marked for pickup. (A full beat resolves on its own.)
+  $('btn-beat').onclick = () => {
+    const view = sceneView;
+    if (!view || !(view.yourTurn && view.phase === 'defense')) return;
+    if (!defenseComplete(view)) return;
+    const entries = [...pendingDef.entries()].sort((x, y) => x[0] - y[0]);
+    const needTake = view.table.slots.some(
+      (slot, i) => slot.defense == null && !pendingDef.has(i)
+    );
+    entries.forEach(([slot, card]) => {
+      socket.emit('move', { move: { type: 'defend', slot, card } });
+    });
+    if (needTake) socket.emit('move', { move: { type: 'take' } });
+    pendingDef.clear();
+    markedPickup.clear();
   };
   $('btn-swap7').onclick = () => socket.emit('move', { move: { type: 'swap7' } });
   $('btn-leave-game').onclick = () => {
@@ -1295,29 +1403,22 @@
       window.location.href = '/ur/?join=' + encodeURIComponent(code || '');
     }, 1500);
   });
-  socket.on('rejoinFailed', () => {
-    localStorage.removeItem('burge_room');
-    localStorage.removeItem('burge_sid');
-  });
   socket.on('leftRoom', () => {
-    localStorage.removeItem('burge_room');
-    localStorage.removeItem('burge_sid');
     leaveGameUi();
     showScreen('screen-menu');
   });
-  socket.on('joined', ({ code }) => {
-    localStorage.setItem('burge_room', code);
-    localStorage.setItem('burge_sid', socket.id);
-  });
-  socket.on('rejoined', ({ code }) => {
-    localStorage.setItem('burge_room', code);
-    localStorage.setItem('burge_sid', socket.id);
+  socket.on('joined', () => {});
+  socket.on('resumed', () => {
     toast(t(lang, 'reconnected'));
+  });
+  // Our unfinished room lives in the other game — go there and resume.
+  socket.on('resumeElsewhere', ({ game } = {}) => {
+    if (game === 'ur') window.location.href = '/ur/';
   });
 
   // A ?join=CODE in the URL (arriving from the other game's redirect) joins
-  // that room as soon as the socket is up; otherwise auto-rejoin the room we
-  // were in, if any.
+  // that room as soon as the socket is up; otherwise ask the server whether
+  // this browser has a seat to come back to (closed tab, lost connection…).
   let pendingJoin = null;
   const joinParam = new URLSearchParams(window.location.search).get('join');
   if (joinParam) {
@@ -1329,14 +1430,10 @@
     if (pendingJoin) {
       const code = pendingJoin;
       pendingJoin = null;
-      socket.emit('joinRoom', { code, name: myName() });
+      socket.emit('joinRoom', { code, name: myName(), clientId: clientId() });
       return;
     }
-    const roomCode = localStorage.getItem('burge_room');
-    const oldSid = localStorage.getItem('burge_sid');
-    if (roomCode && oldSid && oldSid !== socket.id) {
-      socket.emit('rejoin', { code: roomCode, oldSid });
-    }
+    socket.emit('resume', { clientId: clientId() });
   });
   socket.on('disconnect', () => {
     toast(t(lang, 'disconnected'));

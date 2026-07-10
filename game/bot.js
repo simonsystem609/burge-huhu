@@ -20,7 +20,7 @@
  * games against the previous heuristic bot (see scripts/train-bot.js).
  */
 
-const { legalMoves } = require('./engine');
+const { legalMoves, findFullDefense } = require('./engine');
 const { cardSuit, cardRank, strength, beats } = require('./deck');
 
 // Weights tuned by scripts/train-bot.js self-play runs (hill-climbing on
@@ -31,7 +31,7 @@ const DEFAULT_WEIGHTS = {
   raceShed: 14, // per card shed in an attack once the talon is empty
   giveQuality: 1.0, // penalty per point of quality given away in an attack
   breakPair: 2.8, // penalty for splitting up a pair
-  usePair: 5, // bonus for playing a full pair inside an attack set
+  usePair: 10, // bonus for playing a full pair inside an attack set
   finishBonus: 1000, // emptying the hand in the race phase = finishing
   deny: 8.4, // beating sends the attacker's card to discard — deny value
   spend: 1.0, // multiplier on the quality of the card burned to beat
@@ -43,6 +43,8 @@ const DEFAULT_WEIGHTS = {
   fillBloat: 1, // per card picked up while the talon lasts
   raceBloat: 10, // per card picked up once the talon is empty
   skipTurn: 3.92, // taking skips our next attack turn
+  raceGiveQuality: 0.4, // race-phase giveaway penalty — send aggressively
+  forceTake: 16, // 2p race: attack the defender provably cannot fully beat
 };
 
 function quality(card, trumpSuit, W) {
@@ -74,13 +76,24 @@ function pairUsage(hand, set) {
   return { used, broken };
 }
 
-function scoreAttack(set, hand, trumpSuit, race, W) {
+function scoreAttack(set, hand, trumpSuit, race, W, state) {
   const shed = set.length;
   let score = race ? W.raceShed * shed : W.fillShed * shed;
-  for (const c of set) score -= W.giveQuality * quality(c, trumpSuit, W);
+  const giveW = race ? W.raceGiveQuality : W.giveQuality;
+  for (const c of set) score -= giveW * quality(c, trumpSuit, W);
   const { used, broken } = pairUsage(hand, set);
   score += W.usePair * used - W.breakPair * broken;
   if (race && shed === hand.length) score += W.finishBonus;
+
+  // Heads-up endgame is perfect information: with the talon empty, every
+  // hidden card is in the defender's hand — count them. An attack the
+  // defender provably cannot fully beat forces a pickup and bloats them.
+  if (race && state && state.players.length === 2) {
+    const defHand = state.players[state.defender].hand;
+    if (!findFullDefense(set, defHand, trumpSuit)) {
+      score += W.forceTake * shed;
+    }
+  }
   return score;
 }
 
@@ -131,7 +144,7 @@ function chooseMove(state, playerIndex, weights) {
     let best = attackMoves[0];
     let bestScore = -Infinity;
     for (const m of attackMoves) {
-      const s = scoreAttack(m.cards, hand, trumpSuit, race, W);
+      const s = scoreAttack(m.cards, hand, trumpSuit, race, W, state);
       if (s > bestScore) {
         bestScore = s;
         best = m;

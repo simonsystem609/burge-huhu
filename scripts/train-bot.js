@@ -93,72 +93,83 @@ function playGame(choosers, rng) {
   return state.loser; // seat index or null (draw)
 }
 
-function evaluate(weights, games2p, games4p, seedBase) {
-  const mine = (s, i) => newBot.chooseMove(s, i, weights);
+/**
+ * Head-to-head score of weight set A vs weight set B over 2-player games
+ * with alternating seats. Draws are bad for BOTH sides (0.25 credit) — a
+ * bürge player should fight to win, not to stall.
+ */
+function head2head(wA, wB, games, seedBase) {
+  const botA = (s, i) => newBot.chooseMove(s, i, wA);
+  const botB = (s, i) => newBot.chooseMove(s, i, wB);
+  let score = 0;
+  for (let g = 0; g < games; g++) {
+    const rng = mulberry32(seedBase + g);
+    const aSeat = g % 2;
+    const choosers = aSeat === 0 ? [botA, botB] : [botB, botA];
+    const loser = playGame(choosers, rng);
+    if (loser == null) score += 0.25;
+    else if (loser !== aSeat) score += 1;
+  }
+  return score / games;
+}
 
+/** Report card vs the frozen old heuristic (2p + 4p). */
+function vsOldBot(weights, games2p, games4p, seedBase) {
+  const mine = (s, i) => newBot.chooseMove(s, i, weights);
   let wins = 0;
-  let n2 = 0;
+  let draws = 0;
   for (let g = 0; g < games2p; g++) {
     const rng = mulberry32(seedBase + g);
     const mySeat = g % 2;
     const choosers = mySeat === 0 ? [mine, oldChooseMove] : [oldChooseMove, mine];
     const loser = playGame(choosers, rng);
-    n2++;
-    if (loser == null) wins += 0.5;
+    if (loser == null) draws++;
     else if (loser !== mySeat) wins++;
   }
-  const winRate2p = wins / n2;
-
   let burge = 0;
-  let n4 = 0;
   for (let g = 0; g < games4p; g++) {
     const rng = mulberry32(seedBase + 100000 + g);
     const mySeat = g % 4;
     const choosers = [oldChooseMove, oldChooseMove, oldChooseMove, oldChooseMove];
     choosers[mySeat] = mine;
-    const loser = playGame(choosers, rng);
-    n4++;
-    if (loser === mySeat) burge++;
+    if (playGame(choosers, rng) === mySeat) burge++;
   }
-  const burgeRate4p = n4 ? burge / n4 : 0.25;
-
-  // Higher is better: 2p win rate plus 4p bürge avoidance vs the 25% baseline.
-  const fitness = winRate2p + 2 * (0.25 - burgeRate4p);
-  return { winRate2p, burgeRate4p, fitness };
+  return {
+    winRate2p: wins / games2p,
+    drawRate2p: draws / games2p,
+    burgeRate4p: games4p ? burge / games4p : null,
+  };
 }
 
 const KEYS = Object.keys(newBot.DEFAULT_WEIGHTS);
 
+/**
+ * Self-play hill climb: two bots fight head-to-head — a candidate replaces
+ * the champion only by beating it directly. This selects for aggression:
+ * draws are punished and there is no committee of weaker bots to farm.
+ */
 function trainLoop(iters) {
   let best = { ...newBot.DEFAULT_WEIGHTS };
-  let bestFit = evaluate(best, 1200, 400, 42);
-  console.log(
-    `start    fitness=${bestFit.fitness.toFixed(4)} ` +
-      `2p=${(bestFit.winRate2p * 100).toFixed(1)}% burge4p=${(bestFit.burgeRate4p * 100).toFixed(1)}%`
-  );
-  const rand = mulberry32(1234567);
+  const rand = mulberry32(7654321);
   const factors = [0.5, 0.7, 1.4, 2.0];
   for (let it = 0; it < iters; it++) {
     const key = KEYS[Math.floor(rand() * KEYS.length)];
     const factor = factors[Math.floor(rand() * factors.length)];
     const cand = { ...best, [key]: best[key] * factor };
-    const fit = evaluate(cand, 1200, 400, 42);
-    const accept = fit.fitness > bestFit.fitness + 0.002;
-    if (accept) {
+    const score = head2head(cand, best, 1600, 42 + it); // fresh seeds per duel
+    if (score > 0.53) {
       best = cand;
-      bestFit = fit;
+      const check = vsOldBot(best, 800, 0, 555000 + it);
       console.log(
         `it ${String(it).padStart(3)} ACCEPT ${key} ×${factor} → ${best[key].toFixed(2)} ` +
-          `fitness=${fit.fitness.toFixed(4)} 2p=${(fit.winRate2p * 100).toFixed(1)}% ` +
-          `burge4p=${(fit.burgeRate4p * 100).toFixed(1)}%`
+          `(beat champion ${(score * 100).toFixed(1)}%; vs old bot ${(check.winRate2p * 100).toFixed(1)}%)`
       );
     }
   }
-  // Fresh-seed validation so the result isn't overfit to the training seeds.
-  const val = evaluate(best, 3000, 1000, 987654);
+  const val = vsOldBot(best, 3000, 1000, 987654);
   console.log(
-    `\nvalidation (fresh seeds): 2p=${(val.winRate2p * 100).toFixed(1)}% ` +
-      `burge4p=${(val.burgeRate4p * 100).toFixed(1)}%`
+    `\nvalidation vs old bot (fresh seeds): 2p=${(val.winRate2p * 100).toFixed(1)}% ` +
+      `draws=${(val.drawRate2p * 100).toFixed(1)}% burge4p=${(val.burgeRate4p * 100).toFixed(1)}%`
   );
   console.log('\nbest weights:\n' + JSON.stringify(best, null, 2));
 }
@@ -167,9 +178,10 @@ const cmd = process.argv[2];
 if (cmd === 'train') {
   trainLoop(Number(process.argv[3]) || 60);
 } else {
-  const r = evaluate(newBot.DEFAULT_WEIGHTS, 3000, 1000, 987654);
+  const r = vsOldBot(newBot.DEFAULT_WEIGHTS, 3000, 1000, 987654);
   console.log(
     `current weights vs old bot: 2p win rate=${(r.winRate2p * 100).toFixed(1)}% ` +
-      `(baseline 50%), 4p bürge rate=${(r.burgeRate4p * 100).toFixed(1)}% (baseline 25%)`
+      `(draws ${(r.drawRate2p * 100).toFixed(1)}%), ` +
+      `4p bürge rate=${(r.burgeRate4p * 100).toFixed(1)}% (baseline 25%)`
   );
 }

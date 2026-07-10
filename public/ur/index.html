@@ -5,6 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
   <title>Royal Game of Ur</title>
   <link rel="stylesheet" href="style.css" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="theme-color" content="#2a1a10" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Bürge" />
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
 </head>
 <body>
   <header class="topbar">
@@ -38,9 +45,9 @@
         <label class="field inline">
           <span>Bot speed</span>
           <select id="bot-speed">
-            <option value="400">Fast</option>
-            <option value="700" selected>Normal</option>
-            <option value="1200">Slow</option>
+            <option value="700">Fast</option>
+            <option value="1200" selected>Normal</option>
+            <option value="2000">Slow</option>
           </select>
         </label>
 
@@ -151,5 +158,12 @@
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="client.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('/sw.js').catch(function () {});
+      });
+    }
+  </script>
 </body>
 </html>

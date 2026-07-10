@@ -6,6 +6,13 @@
     <title>Bürge · Hühü</title>
     <link rel="stylesheet" href="style.css" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%83%8F%3C/text%3E%3C/svg%3E" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#16603a" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Bürge" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
   </head>
   <body>
     <header class="topbar">
@@ -131,6 +138,7 @@
             <div id="my-hand" class="hand-zone"></div>
             <div class="my-actions">
               <button id="btn-attack" class="primary" data-i18n="attackBtn">Küldés</button>
+              <button id="btn-beat" class="primary" data-i18n="beatBtn">Ütés</button>
               <button id="btn-swap7" class="ghost" data-i18n="swap7">Adu VII csere</button>
               <button id="btn-leave-game" class="ghost small" data-i18n="leave">Kilépés</button>
             </div>
@@ -178,5 +186,12 @@
     <script src="i18n.js"></script>
     <script src="cards.js"></script>
     <script src="client.js"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', function () {
+          navigator.serviceWorker.register('/sw.js').catch(function () {});
+        });
+      }
+    </script>
   </body>
 </html>
