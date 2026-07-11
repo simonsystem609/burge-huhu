@@ -8,6 +8,7 @@ const { Server } = require('socket.io');
 const { RoomManager, MAX_SEATS } = require('./game/rooms');
 const { applyMove, currentActor, viewFor } = require('./game/engine');
 const { chooseMove } = require('./game/bot');
+const gamelog = require('./game/gamelog');
 
 const PORT = process.env.PORT || 3000;
 const DEFAULT_BOT_DELAY = Number(process.env.BOT_DELAY_MS || 800);
@@ -100,6 +101,7 @@ function driveBots(code) {
     } catch (err) {
       return;
     }
+    gamelog.logMove(r, a.player, move);
     emitGame(r);
     driveBots(code);
   }, room.botDelay || DEFAULT_BOT_DELAY);
@@ -145,6 +147,7 @@ io.on('connection', (socket) => {
     const botCount = Math.min(Math.max(Number(bots) || 1, 1), MAX_SEATS - 1);
     for (let i = 0; i < botCount; i++) rm.addBot(room);
     rm.startGame(room);
+    gamelog.logStart(room);
     socket.emit('joined', { code: room.code });
     emitGame(room);
     driveBots(room.code);
@@ -179,6 +182,7 @@ io.on('connection', (socket) => {
     if (!room || socket.id !== room.hostId) return;
     const res = rm.startGame(room);
     if (res.error) return socket.emit('errorMsg', res.error);
+    gamelog.logStart(room);
     emitGame(room);
     driveBots(room.code);
   });
@@ -193,6 +197,7 @@ io.on('connection', (socket) => {
     } catch (err) {
       return socket.emit('errorMsg', String(err.message || err).replace('illegal:', ''));
     }
+    gamelog.logMove(room, seatIdx, move);
     emitGame(room);
     driveBots(room.code);
   });
@@ -204,6 +209,7 @@ io.on('connection', (socket) => {
     rm.resetGame(room);
     const res = rm.startGame(room);
     if (res.error) return socket.emit('errorMsg', res.error);
+    gamelog.logStart(room);
     emitGame(room);
     driveBots(room.code);
   });

@@ -36,7 +36,8 @@ const DEFAULT_WEIGHTS = {
   deny: 8.4, // beating sends the attacker's card to discard — deny value
   spend: 1.0, // multiplier on the quality of the card burned to beat
   raceBeat: 4, // in the race, beating sheds one of our own cards too
-  pickTrump: 3, // taking a trump on purpose
+  pickTrump: 3, // taking a trump on purpose in the race
+  pickTrumpFill: 6, // gathering trumps is THE early/mid-game plan
   pickPair: 2.5, // taking a card that completes a pair in hand
   pickHigh: 2.8, // taking a strong card (Felső or better)
   pickJunk: 4.2, // penalty for hoovering up weak off-suit singles
@@ -60,8 +61,8 @@ const PERSONALITIES = {
     giveQuality: 0.7, raceGiveQuality: 0.7,
   },
   gatherer: {
-    pickTrump: 2.2, pickPair: 2.0, pickHigh: 1.6, pickJunk: 0.6,
-    skipTurn: 0.6, fish: 1.5,
+    pickTrump: 2.2, pickTrumpFill: 1.8, pickPair: 2.0, pickHigh: 1.6,
+    pickJunk: 0.6, skipTurn: 0.6, fish: 1.5,
   },
   cautious: {
     giveQuality: 1.35, breakPair: 1.4, spend: 1.2, trumpPremium: 1.25,
@@ -221,7 +222,9 @@ function scoreAttack(set, hand, trumpSuit, race, W, ctx) {
 /** Value of deliberately picking up an attack card. */
 function pickupGain(card, hand, trumpSuit, race, W) {
   let gain = 0;
-  if (cardSuit(card) === trumpSuit) gain += W.pickTrump;
+  // Early and mid game the plan is to GATHER trumps (hands refill anyway,
+  // so a picked-up trump is nearly free); in the race it's just extra bulk.
+  if (cardSuit(card) === trumpSuit) gain += race ? W.pickTrump : W.pickTrumpFill;
   const r = cardRank(card);
   if (hand.some((c) => cardRank(c) === r)) gain += W.pickPair;
   if (strength(card) >= 5) gain += W.pickHigh;
