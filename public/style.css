@@ -168,7 +168,12 @@ input:focus, select:focus { outline: 2px solid var(--accent); }
 .pile { display: flex; flex-direction: row; align-items: center; gap: 12px; min-height: 0; }
 .talon-group { justify-content: flex-start; padding-left: 8px; }
 .discard-pile { justify-content: flex-end; padding-right: 8px; }
-.pile-label { color: var(--muted); font-size: 0.78em; text-align: center; white-space: nowrap; }
+/* Sits at the bottom edge of the strip, below the card cluster, so the
+ * trump peeking out of the deck can never bury it. */
+.pile-label {
+  color: var(--muted); font-size: 0.78em; text-align: center; white-space: nowrap;
+  align-self: flex-end; transform: translateY(2px); padding-bottom: 2px;
+}
 .pile-label b { color: var(--ink); }
 .pile-spot { position: relative; width: 128px; height: 96px; flex: none; }
 .stack-back { position: absolute; left: 50%; top: 50%; transition: opacity 0.3s; }
