@@ -670,7 +670,14 @@
     });
 
     if (!view.trumpPicked) {
-      want.set(view.trumpCard, { pos: trumpPos(a, s), kind: 'trump', cls: {} });
+      // When the trump-VII swap is legal, the face-up trump itself glows
+      // and is clickable — same action as the swap button, easier to find.
+      const canSwap = view.legal.some((m) => m.type === 'swap7');
+      want.set(view.trumpCard, {
+        pos: trumpPos(a, s),
+        kind: 'trump',
+        cls: { targetable: canSwap, clickable: canSwap },
+      });
     }
 
     want.forEach((w, cardId) => {
@@ -1012,8 +1019,9 @@
     const kind = el.getAttribute('data-kind');
     const card = el.getAttribute('data-card');
     if (!card) return;
-    if (kind !== 'hand' && kind !== 'staged' && kind !== 'attack' && kind !== 'pending-def') return;
+    if (kind !== 'hand' && kind !== 'staged' && kind !== 'attack' && kind !== 'pending-def' && kind !== 'trump') return;
     if ((kind === 'attack' || kind === 'pending-def') && sceneView.phase !== 'defense') return;
+    if (kind === 'trump' && !el.classList.contains('clickable')) return;
     drag = {
       el,
       card,
@@ -1096,7 +1104,11 @@
   function handleClick(d) {
     const view = sceneView;
     if (!view) return;
-    if (d.kind === 'hand' && view.phase === 'attack') {
+    if (d.kind === 'trump') {
+      if (view.legal.some((m) => m.type === 'swap7')) {
+        socket.emit('move', { move: { type: 'swap7' } });
+      }
+    } else if (d.kind === 'hand' && view.phase === 'attack') {
       staged.add(d.card);
       settle(view, false);
     } else if (d.kind === 'staged') {

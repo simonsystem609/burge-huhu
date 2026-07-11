@@ -47,6 +47,7 @@ const DEFAULT_WEIGHTS = {
   forceTake: 16, // attack no combination of unseen cards can fully beat
   unbeatable: 3, // per attack card that no unseen card can beat
   fish: 1.2, // trump fishing: dump big while trumpless to draw fresh cards
+  probExp: 6, // convexity of the forced-pickup bet: only near-certainty pays
 };
 
 // Bot personalities: weight multipliers giving each bot a temperament.
@@ -101,16 +102,64 @@ function unseenCards(state, playerIndex) {
  * knownHolds — visible pickups, the trump draw, swap7) cannot be the
  * defender's, so they leave the pool. Still a superset of their real hand,
  * so "no full defense exists" stays provable — just provable more often.
+ * The defender's own known cards are returned too: they are certainly held.
  */
 function defenderPool(state, playerIndex, unseen) {
-  if (!state.knownHolds) return unseen;
+  if (!state.knownHolds) return { pool: unseen, certain: [] };
   const othersKnown = new Set();
   state.players.forEach((p, i) => {
     if (i === state.defender || i === playerIndex) return;
     for (const c of state.knownHolds[i] || []) othersKnown.add(c);
   });
-  if (othersKnown.size === 0) return unseen;
-  return unseen.filter((c) => !othersKnown.has(c));
+  const pool = othersKnown.size === 0 ? unseen : unseen.filter((c) => !othersKnown.has(c));
+  return { pool, certain: state.knownHolds[state.defender] || [] };
+}
+
+// Deterministic per-state RNG for the Monte-Carlo sampling below — the same
+// position always produces the same estimate, so self-play training and the
+// smoke tests stay reproducible.
+function stateRng(state) {
+  let seed =
+    state.turnCount * 2654435761 +
+    state.talon.length * 40503 +
+    state.discard.length * 65599 +
+    state.players.reduce((a, p) => a * 31 + p.hand.length, 7);
+  seed >>>= 0;
+  return function () {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * Probabilistic counting: P(the defender CANNOT fully beat `set`), given
+ * that their hand is `handSize` cards drawn from `pool`, of which `certain`
+ * are known to be held for sure. Estimated by Monte-Carlo: sample plausible
+ * hands, run the exact bipartite matching on each. Heads-up with the talon
+ * empty the pool IS the hand, so the estimate collapses to exactly 0 or 1.
+ */
+function probNoFullBeat(set, pool, certain, handSize, trumpSuit, rng, samples) {
+  if (!findFullDefense(set, pool, trumpSuit)) return 1; // provably impossible
+  if (pool.length <= handSize) return 0; // their whole hand is known
+  const free = pool.filter((c) => !certain.includes(c));
+  const need = Math.max(0, handSize - certain.length);
+  if (need >= free.length) return findFullDefense(set, pool, trumpSuit) ? 0 : 1;
+  let fail = 0;
+  const arr = free.slice();
+  for (let s = 0; s < samples; s++) {
+    for (let i = 0; i < need; i++) {
+      const j = i + Math.floor(rng() * (arr.length - i));
+      const t = arr[i];
+      arr[i] = arr[j];
+      arr[j] = t;
+    }
+    const hand = certain.concat(arr.slice(0, need));
+    if (!findFullDefense(set, hand, trumpSuit)) fail++;
+  }
+  return fail / samples;
 }
 
 function quality(card, trumpSuit, W) {
@@ -156,21 +205,15 @@ function scoreAttack(set, hand, trumpSuit, race, W, ctx) {
   // Only mass churn counts; single-card dribbles don't refresh the hand.
   if (ctx && ctx.fishing && shed >= 3) score += W.fish * shed;
 
-  // Card counting (public info only — unseen minus other players' known
-  // holdings), race phase only: there, forcing a pickup is pure profit.
-  // If no combination of cards the defender could possibly hold beats this
-  // whole set, they MUST take it — heads-up with the talon empty the pool
-  // IS their exact hand; otherwise it fires only when provably impossible.
+  // Provably unbeatable cards (no card the defender could possibly hold
+  // beats them) still score in the base pass; the probabilistic whole-set
+  // estimate is added in a second pass over the top candidates only.
   if (ctx && ctx.pool && race) {
-    if (!findFullDefense(set, ctx.pool, trumpSuit)) {
-      score += W.forceTake * shed;
-    } else {
-      let sure = 0;
-      for (const c of set) {
-        if (!ctx.pool.some((u) => beats(c, u, trumpSuit))) sure++;
-      }
-      score += W.unbeatable * sure;
+    let sure = 0;
+    for (const c of set) {
+      if (!ctx.pool.some((u) => beats(c, u, trumpSuit))) sure++;
     }
+    score += W.unbeatable * sure;
   }
   return score;
 }
@@ -225,12 +268,13 @@ function chooseMove(state, playerIndex, weights, opts) {
   const attackMoves = moves.filter((m) => m.type === 'attack');
   if (attackMoves.length > 0) {
     const unseen = unseenCards(state, playerIndex);
+    const { pool, certain } = defenderPool(state, playerIndex, unseen);
     const bestTrump = Math.max(
       -1,
       ...hand.filter((c) => cardSuit(c) === trumpSuit).map((c) => strength(c))
     );
     const ctx = {
-      pool: defenderPool(state, playerIndex, unseen),
+      pool,
       fishing: !race && state.talon.length > 1 && bestTrump < 3,
     };
     const scored = attackMoves.map((m) => ({
@@ -238,12 +282,30 @@ function chooseMove(state, playerIndex, weights, opts) {
       s: scoreAttack(m.cards, hand, trumpSuit, race, W, ctx),
     }));
     scored.sort((a, b) => b.s - a.s);
+
+    // Probabilistic counting, race phase only: for the leading candidates,
+    // estimate the chance the defender simply cannot beat the whole set
+    // (their hand size is public; possible cards come from the pool) and
+    // reward likely forced pickups proportionally.
+    if (race) {
+      const mcRng = stateRng(state);
+      const defHandSize = state.players[state.defender].hand.length;
+      const top = scored.slice(0, 24); // race hands are small — cover almost all sets
+      for (const x of top) {
+        const p = probNoFullBeat(x.m.cards, pool, certain, defHandSize, trumpSuit, mcRng, 32);
+        // Convex credit: a coin-flip force is a bad bet with good cards —
+        // only near-certain forced pickups earn the full bonus.
+        x.s += W.forceTake * x.m.cards.length * Math.pow(p, W.probExp);
+      }
+      scored.sort((a, b) => b.s - a.s);
+    }
+
     // Temperature: with temp > 0, any move close enough to the best is fair
     // game — bots get occasional bold, off-script sends.
     if (temp > 0 && scored.length > 1) {
       const cutoff = scored[0].s - temp * 6;
-      const pool = scored.filter((x) => x.s >= cutoff);
-      return pool[Math.floor(rng() * pool.length)].m;
+      const cand = scored.filter((x) => x.s >= cutoff);
+      return cand[Math.floor(rng() * cand.length)].m;
     }
     return scored[0].m;
   }
