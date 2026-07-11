@@ -28,6 +28,8 @@
         <h1>Royal Game of Ur</h1>
         <p class="subtitle">4600-year-old Mesopotamian race game &mdash; 2 players</p>
 
+        <button id="btn-install-app" type="button" class="ghost install-btn" data-install-app>Install App</button>
+
         <label class="field">
           <span>Your name</span>
           <input id="name-input" type="text" maxlength="12" placeholder="Enter your name" />
@@ -158,6 +160,7 @@
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="client.js"></script>
+  <script src="/pwa-install.js"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', function () {

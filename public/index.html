@@ -33,6 +33,10 @@
           <h1 data-i18n="title">Bürge · Hühü</h1>
           <p class="subtitle" data-i18n="subtitle">Magyar kártyajáték – 2–4 játékos</p>
 
+          <button id="btn-install-app" type="button" class="ghost install-btn" data-install-app data-i18n="installApp">
+            Alkalmazás telepítése
+          </button>
+
           <label class="field">
             <span data-i18n="yourName">Neved</span>
             <input id="name-input" type="text" maxlength="16" data-i18n-ph="namePh" placeholder="Írd be a neved" />
@@ -186,6 +190,7 @@
     <script src="i18n.js"></script>
     <script src="cards.js"></script>
     <script src="client.js"></script>
+    <script src="/pwa-install.js"></script>
     <script>
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', function () {

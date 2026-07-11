@@ -83,6 +83,12 @@ button.small { padding: 6px 10px; font-size: 0.85em; }
   box-shadow: var(--shadow);
 }
 .menu-card h1 { margin: 0; font-size: 2rem; color: var(--gold); }
+.install-btn {
+  display: block; width: 100%; margin: 12px 0 4px;
+  border: 1px dashed rgba(229, 181, 58, 0.5); color: var(--gold);
+  font-size: 0.85em; padding: 8px 12px;
+}
+.install-btn:hover { border-style: solid; background: rgba(229, 181, 58, 0.08); }
 .menu-card h2 { margin: 0 0 12px; color: var(--gold); }
 .subtitle { color: var(--muted); margin: 4px 0 20px; }
 .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }

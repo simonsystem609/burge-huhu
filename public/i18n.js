@@ -22,6 +22,7 @@
     hu: {
       title: 'Bürge · Hühü',
       subtitle: 'Magyar kártyajáték – 2–4 játékos',
+      installApp: 'Alkalmazás telepítése',
       yourName: 'Neved',
       namePh: 'Írd be a neved',
       single: 'Egyjátékos (gépek ellen)',
@@ -101,6 +102,7 @@
     en: {
       title: 'Bürge · Hühü',
       subtitle: 'Hungarian card game – 2–4 players',
+      installApp: 'Install App',
       yourName: 'Your name',
       namePh: 'Enter your name',
       single: 'Singleplayer (vs bots)',

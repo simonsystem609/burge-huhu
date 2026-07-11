@@ -13,6 +13,7 @@ const PRECACHE = [
   '/client.js',
   '/i18n.js',
   '/cards.js',
+  '/pwa-install.js',
   '/manifest.webmanifest',
   '/ur/',
   '/ur/index.html',
