@@ -111,6 +111,19 @@ function seatIndexOf(room, socketId) {
   return room.seats.findIndex((s) => s.socketId === socketId);
 }
 
+// Broadcasts a player's tentative, unconfirmed card placement (staging an
+// attack, placing a defense before Beat) to everyone else at the table —
+// purely cosmetic, never touches game state. The room's authoritative
+// `game` view is always the source of truth; this just lets opponents watch
+// the decision happen live instead of only seeing the final result.
+function emitPreview(room, fromSeatIdx, payload) {
+  for (let i = 0; i < room.seats.length; i++) {
+    if (i === fromSeatIdx) continue;
+    const seat = room.seats[i];
+    if (seat.socketId) socketOf(seat.socketId)?.emit('preview', { seat: fromSeatIdx, ...payload });
+  }
+}
+
 // ── Socket handlers ───────────────────────────────────────────────────────
 
 io.on('connection', (socket) => {
@@ -200,6 +213,34 @@ io.on('connection', (socket) => {
     gamelog.logMove(room, seatIdx, move);
     emitGame(room);
     driveBots(room.code);
+  });
+
+  // Live preview of an in-progress (not yet confirmed) attack stage or
+  // defense placement. Validated against the actual current attacker/
+  // defender so a stray or stale event can't spoof another player's turn;
+  // otherwise trusted as-is since it never mutates game state.
+  socket.on('preview', (payload) => {
+    const room = rm.findRoomBySocket(socket.id);
+    if (!room || !room.game) return;
+    const seatIdx = seatIndexOf(room, socket.id);
+    if (seatIdx === -1) return;
+    const g = room.game;
+    const type = payload && payload.type;
+    if (type === 'attack') {
+      if (g.phase !== 'attack' || g.attacker !== seatIdx) return;
+      const cards = Array.isArray(payload.cards)
+        ? payload.cards.filter((c) => typeof c === 'string').slice(0, 5)
+        : [];
+      emitPreview(room, seatIdx, { type: 'attack', cards });
+    } else if (type === 'defense') {
+      if (g.phase !== 'defense' || g.defender !== seatIdx) return;
+      const slots = Array.isArray(payload.slots)
+        ? payload.slots
+          .filter((s) => s && Number.isInteger(s.slot) && typeof s.card === 'string')
+          .slice(0, 5)
+        : [];
+      emitPreview(room, seatIdx, { type: 'defense', slots });
+    }
   });
 
   socket.on('rematch', () => {

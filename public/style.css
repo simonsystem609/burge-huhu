@@ -241,6 +241,10 @@ input:focus, select:focus { outline: 2px solid var(--accent); }
 .pcard.targetable .card { box-shadow: 0 0 0 2px rgba(229,181,58,0.6), 0 3px 8px rgba(0,0,0,0.35); }
 /* Unconfirmed defense card sitting on a slot (submitted by the Beat button) */
 .pcard.pending .card { box-shadow: 0 0 0 3px var(--gold), 0 8px 16px rgba(0,0,0,0.45); }
+/* Someone else's tentative, unconfirmed placement — a live look at their
+ * decision in progress, distinct from my own gold "pending" outline. */
+.pcard.remote .card { box-shadow: 0 0 0 3px var(--accent), 0 8px 16px rgba(0,0,0,0.45); animation: remotePulse 1.1s ease-in-out infinite; }
+@keyframes remotePulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
 
 /* Side log */
 .sidelog {

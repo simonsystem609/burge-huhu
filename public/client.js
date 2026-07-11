@@ -201,6 +201,10 @@
   // the player can freely swap cards around or change their mind. Slots
   // left without a card are picked up automatically on confirm.
   let pendingDef = new Map();
+  // Live look at an OPPONENT's own tentative (unconfirmed) placement, relayed
+  // by the server purely for display — never authoritative. Raw shape as
+  // received: { seat, type: 'attack'|'defense', cards?, slots? }.
+  let remotePreview = null;
 
   function clearSceneTimers() {
     timers.forEach(clearTimeout);
@@ -216,6 +220,7 @@
     staged.clear();
     pendingDef.clear();
     selectedDef = null;
+    remotePreview = null;
   }
 
   function leaveGameUi() {
@@ -259,7 +264,7 @@
       els.delete(key);
     }
   }
-  const STATE_CLASSES = ['clickable', 'dim', 'sel', 'staged', 'targetable', 'marked', 'pending'];
+  const STATE_CLASSES = ['clickable', 'dim', 'sel', 'staged', 'targetable', 'marked', 'pending', 'remote'];
   function stripStateClasses(el) {
     STATE_CLASSES.forEach((c) => el.classList.remove(c));
   }
@@ -379,6 +384,16 @@
   }
   function handCenter(a, s) {
     return { x: a.hand.x + a.hand.w / 2, y: a.hand.y + a.hand.h / 2, scale: s, z: Z.flight };
+  }
+  // Mirrors stagedPos, but anchored to an OPPONENT's fan instead of my own
+  // hand — where their live attack-staging preview cards float.
+  function remoteStagedPos(fr, s, j, m) {
+    const fscale = PILE_SCALE * s;
+    const cw = CW * fscale;
+    const step = cw * 0.55;
+    const total = cw + step * (m - 1);
+    const x0 = fr.x + (fr.w - total) / 2 + cw / 2;
+    return { x: x0 + j * step, y: fr.y - (CH * fscale) / 2, scale: fscale, z: Z.staged + j };
   }
 
   // Display order for my hand: trump suit first, then the other suits.
@@ -669,6 +684,51 @@
       });
     });
 
+    // Someone ELSE's live, unconfirmed placement — relayed purely for
+    // display. Only rendered for cards not already accounted for above
+    // (once a placement is actually confirmed, the real per-slot data a
+    // few lines up already covers it and simply takes over the same
+    // element). Revealing one specifically POPS a back-token out of their
+    // fan via knownEl; snapshotted here so the fan-count reconciliation
+    // below doesn't also top itself back up to their full hand count and
+    // end up with one phantom back beyond what's actually in their hand.
+    const previewBorrowed = {};
+    const previewSeat = view.phase === 'attack' ? view.attacker : view.phase === 'defense' ? view.defender : null;
+    const activePreview =
+      remotePreview &&
+      previewSeat != null &&
+      previewSeat !== me &&
+      remotePreview.seat === previewSeat &&
+      remotePreview.type === view.phase
+        ? remotePreview
+        : null;
+    if (activePreview && activePreview.type === 'attack') {
+      const fr = a.fans[previewSeat];
+      const cards = activePreview.cards || [];
+      cards.forEach((card, j) => {
+        if (want.has(card)) return;
+        knownEl(card, previewSeat);
+        previewBorrowed[previewSeat] = (previewBorrowed[previewSeat] || 0) + 1;
+        const pos = fr ? remoteStagedPos(fr, s, j, cards.length) : fanApprox(a, s, previewSeat);
+        want.set(card, { pos, kind: 'remote-preview', cls: { remote: true }, previewSeat });
+      });
+    } else if (activePreview && activePreview.type === 'defense') {
+      (activePreview.slots || []).forEach(({ slot, card }) => {
+        if (want.has(card)) return;
+        const sl = view.table.slots[slot];
+        if (!sl || sl.defense != null) return; // already resolved for real
+        knownEl(card, previewSeat);
+        previewBorrowed[previewSeat] = (previewBorrowed[previewSeat] || 0) + 1;
+        want.set(card, {
+          pos: slotPos(a, s, slot, nSlots, 'defense'),
+          kind: 'remote-preview',
+          slot,
+          cls: { remote: true },
+          previewSeat,
+        });
+      });
+    }
+
     if (!view.trumpPicked) {
       // When the trump-VII swap is legal, the face-up trump itself glows
       // and is clickable — same action as the swap button, easier to find.
@@ -679,6 +739,13 @@
         cls: { targetable: canSwap, clickable: canSwap },
       });
     }
+
+    // Snapshot which cards were shown as a remote preview in the PREVIOUS
+    // pass, so any that dropped out below (un-staged/un-assigned before
+    // confirming) can be returned to their owner's hidden fan.
+    const prevPreview = [...els.entries()]
+      .filter(([, el]) => el.getAttribute('data-kind') === 'remote-preview')
+      .map(([key, el]) => ({ key, seat: Number(el.getAttribute('data-preview-seat')) }));
 
     want.forEach((w, cardId) => {
       let el = els.get(cardId);
@@ -693,8 +760,17 @@
       el.setAttribute('data-kind', w.kind);
       if (w.slot != null) el.setAttribute('data-slot', String(w.slot));
       else el.removeAttribute('data-slot');
+      if (w.previewSeat != null) el.setAttribute('data-preview-seat', String(w.previewSeat));
+      else el.removeAttribute('data-preview-seat');
       STATE_CLASSES.forEach((k) => el.classList.toggle(k, !!w.cls[k]));
       place(el, w.pos, opts);
+    });
+
+    // Any previously-previewed card that's no longer wanted (dropped from
+    // the preview, and not confirmed for real either) goes back to hiding
+    // in its owner's fan.
+    prevPreview.forEach(({ key, seat }) => {
+      if (!want.has(key)) flyToFan(seat, key);
     });
 
     // Remove known cards that are no longer visible anywhere (unless they
@@ -705,13 +781,18 @@
       if (!want.has(key) && !discarding.has(key)) removeEl(key);
     });
 
-    // Opponent fans: reconcile back-token counts and spread them out.
+    // Opponent fans: reconcile back-token counts and spread them out. A
+    // card currently borrowed out for a live preview (previewBorrowed)
+    // still counts toward their hand size but isn't sitting in the fan, so
+    // the target count excludes it — otherwise a phantom extra back would
+    // appear alongside the revealed preview card.
     view.players.forEach((p) => {
       if (p.seat === me) return;
       if (!fans[p.seat]) fans[p.seat] = [];
       const list = fans[p.seat];
-      while (list.length > p.count) removeEl(list.pop());
-      while (list.length < p.count) {
+      const target = p.count - (previewBorrowed[p.seat] || 0);
+      while (list.length > target) removeEl(list.pop());
+      while (list.length < target) {
         const key = newBackKey();
         const el = makeCardEl(true);
         els.set(key, el);
@@ -912,6 +993,17 @@
     sceneView = view;
     showScreen('screen-game');
 
+    // A remote preview is only valid for the exact actor/phase it was sent
+    // for. Once the game moves past that (resolved, new attacker, new
+    // defender), any leftover preview data is stale and must not resurface
+    // if that same seat happens to attack/defend again later.
+    if (remotePreview) {
+      const stillRelevant =
+        (remotePreview.type === 'attack' && view.phase === 'attack' && view.attacker === remotePreview.seat) ||
+        (remotePreview.type === 'defense' && view.phase === 'defense' && view.defender === remotePreview.seat);
+      if (!stillRelevant) remotePreview = null;
+    }
+
     const steps = [];
     let tEnd = 0;
     let settleInstant = false;
@@ -1090,15 +1182,44 @@
     $('slots-area').classList.remove('drop-hint');
   }
 
+  // Broadcast my own current staging/placement so opponents can watch it
+  // happen live, instead of only seeing the final confirmed result. Purely
+  // cosmetic on the receiving end — never authoritative.
+  function emitAttackPreview() {
+    if (!sceneView || !(sceneView.yourTurn && sceneView.phase === 'attack')) return;
+    socket.emit('preview', { type: 'attack', cards: [...staged] });
+  }
+  function emitDefensePreview() {
+    if (!sceneView || !(sceneView.yourTurn && sceneView.phase === 'defense')) return;
+    socket.emit('preview', {
+      type: 'defense',
+      slots: [...pendingDef.entries()].map(([slot, card]) => ({ slot, card })),
+    });
+  }
+
+  // Stage/unstage a hand card for an attack (unconfirmed — Send submits it).
+  function stageCard(card) {
+    staged.add(card);
+    settle(sceneView, false);
+    emitAttackPreview();
+  }
+  function unstageCard(card) {
+    staged.delete(card);
+    settle(sceneView, false);
+    emitAttackPreview();
+  }
+
   // Place a hand card on a slot locally (unconfirmed — Beat submits it).
   function assignDefense(slot, card) {
     pendingDef.set(slot, card);
     selectedDef = null;
     settle(sceneView, false);
+    emitDefensePreview();
   }
   function unassignDefense(slot) {
     pendingDef.delete(slot);
     settle(sceneView, false);
+    emitDefensePreview();
   }
 
   function handleClick(d) {
@@ -1109,11 +1230,9 @@
         socket.emit('move', { move: { type: 'swap7' } });
       }
     } else if (d.kind === 'hand' && view.phase === 'attack') {
-      staged.add(d.card);
-      settle(view, false);
+      stageCard(d.card);
     } else if (d.kind === 'staged') {
-      staged.delete(d.card);
-      settle(view, false);
+      unstageCard(d.card);
     } else if (d.kind === 'pending-def') {
       unassignDefense(Number(d.slot));
     } else if (d.kind === 'hand' && view.phase === 'defense') {
@@ -1157,13 +1276,13 @@
     const aboveHand = py < a.hand.y - 10;
 
     if (d.kind === 'hand' && view.phase === 'attack') {
-      if (aboveHand) staged.add(d.card);
-      settle(view, false);
+      if (aboveHand) stageCard(d.card);
+      else settle(view, false);
       return;
     }
     if (d.kind === 'staged') {
-      if (!aboveHand) staged.delete(d.card);
-      settle(view, false);
+      if (!aboveHand) unstageCard(d.card);
+      else settle(view, false);
       return;
     }
     if (d.kind === 'hand' && view.phase === 'defense') {
@@ -1222,6 +1341,17 @@
   };
   // Confirm the whole defense at once: submit each placed card, then pick
   // up everything left uncovered. (A full beat resolves on its own.)
+  //
+  // The server applies (and broadcasts a view for) each submitted move one
+  // at a time, so for a brief window some of these cards are "sent but not
+  // yet reflected" in the views coming back. pendingDef is deliberately NOT
+  // cleared here — clearing it early made settle() misclassify those
+  // in-flight cards as ordinary hand cards (since the server's own hand
+  // array still listed them) and fly them back before snapping them to
+  // discard once confirmed. The per-view pruning in settle() already
+  // removes each entry the moment its own confirmation arrives, and clears
+  // the rest in one go once the exchange resolves — so it cleans up exactly
+  // in step with the server instead of jumping ahead of it.
   $('btn-beat').onclick = () => {
     const view = sceneView;
     if (!view || !(view.yourTurn && view.phase === 'defense')) return;
@@ -1233,7 +1363,7 @@
       socket.emit('move', { move: { type: 'defend', slot, card } });
     });
     if (needTake) socket.emit('move', { move: { type: 'take' } });
-    pendingDef.clear();
+    $('btn-beat').disabled = true; // re-enabled by the next render if still relevant
   };
   $('btn-swap7').onclick = () => socket.emit('move', { move: { type: 'swap7' } });
   $('btn-leave-game').onclick = () => {
@@ -1379,6 +1509,16 @@
 
   // ── Socket events ────────────────────────────────────────────────
   socket.on('lobby', renderLobby);
+  // Another player's tentative (unconfirmed) attack staging or defense
+  // placement, relayed live. Re-validated against the CURRENT authoritative
+  // view before accepting — a stale or mismatched event is simply dropped.
+  socket.on('preview', (d) => {
+    if (!sceneView || !d) return;
+    if (d.type === 'attack' && !(sceneView.phase === 'attack' && sceneView.attacker === d.seat)) return;
+    if (d.type === 'defense' && !(sceneView.phase === 'defense' && sceneView.defender === d.seat)) return;
+    remotePreview = d;
+    settle(sceneView, false);
+  });
   socket.on('errorMsg', (code) => toast(t(lang, 'err_' + code) || t(lang, 'err_generic')));
   // The code belongs to a Royal Game of Ur room — hop over there with the
   // code prefilled so the join completes automatically.
