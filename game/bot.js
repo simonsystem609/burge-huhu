@@ -304,10 +304,21 @@ function chooseMove(state, playerIndex, weights, opts) {
     }
 
     // Temperature: with temp > 0, any move close enough to the best is fair
-    // game — bots get occasional bold, off-script sends.
+    // game — bots get occasional bold, off-script sends. But boldness in
+    // WHICH cards to lead with should never mean accidentally giving away a
+    // trump the top-scoring plan didn't call for: if the deterministic best
+    // holds its trumps back, keep the whole random pool trump-free too
+    // (fill phase only — in the race, dumping trumps is often correct).
     if (temp > 0 && scored.length > 1) {
       const cutoff = scored[0].s - temp * 6;
-      const cand = scored.filter((x) => x.s >= cutoff);
+      let cand = scored.filter((x) => x.s >= cutoff);
+      if (!race) {
+        const bestUsesTrump = scored[0].m.cards.some((c) => cardSuit(c) === trumpSuit);
+        if (!bestUsesTrump) {
+          const noTrumpCand = cand.filter((x) => !x.m.cards.some((c) => cardSuit(c) === trumpSuit));
+          if (noTrumpCand.length > 0) cand = noTrumpCand;
+        }
+      }
       return cand[Math.floor(rng() * cand.length)].m;
     }
     return scored[0].m;
