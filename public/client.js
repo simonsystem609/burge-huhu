@@ -170,7 +170,7 @@
       let badges = '';
       if (s.isHost) badges += `<span class="badge host">${t(lang, 'host')}</span>`;
       if (isYou) badges += `<span class="badge you">${t(lang, 'you')}</span>`;
-      if (s.isBot) badges += `<span class="badge bot">BOT</span>`;
+      if (s.isBot) badges += '<span class="badge bot">BOT</span>';
       const kick =
         iAmHost && !s.isHost
           ? `<button class="kick ghost small" data-seat="${s.id}">✕</button>`
@@ -213,7 +213,7 @@
   // on it. Nothing is sent to the server until the Beat button confirms, so
   // the player can freely swap cards around or change their mind. Slots
   // left without a card are picked up automatically on confirm.
-  let pendingDef = new Map();
+  const pendingDef = new Map();
   // Live look at an OPPONENT's own tentative (unconfirmed) placement, relayed
   // by the server purely for display — never authoritative. Raw shape as
   // received: { seat, type: 'attack'|'defense', cards?, slots? }.
@@ -1416,8 +1416,8 @@
       const cardStr = p.cards
         ? p.cards.map((c) => cardName(lang, c)).join(', ')
         : p.card
-        ? cardName(lang, p.card)
-        : '';
+          ? cardName(lang, p.card)
+          : '';
       const params = {
         p: p.player != null ? nameOf(p.player) : '',
         card: cardStr,
@@ -1520,7 +1520,7 @@
 
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;',
     }[c]));
   }
 

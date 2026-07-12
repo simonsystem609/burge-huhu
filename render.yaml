@@ -8,7 +8,7 @@ services:
     name: burge-huhu
     runtime: node
     plan: free
-    buildCommand: npm install
+    buildCommand: npm ci --omit=dev
     startCommand: npm start
     healthCheckPath: /healthz
     envVars:

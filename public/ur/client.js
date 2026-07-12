@@ -32,7 +32,7 @@
   const SHARED = new Set([4, 5, 6, 7, 12, 13, 16, 17]);
   // Rosettes per Finkel / the British Museum board: path steps 4, 8 and 14.
   // Kept in sync with the server (the game view carries the active set).
-  var ROSETTES = new Set([3, 4, 11, 14, 18]);
+  let ROSETTES = new Set([3, 4, 11, 14, 18]);
 
   const $ = function (id) { return document.getElementById(id); };
 
@@ -48,9 +48,9 @@
     });
   }
 
-  var toastTimer = null;
+  let toastTimer = null;
   function toast(msg) {
-    var el = $('toast');
+    const el = $('toast');
     el.textContent = msg;
     el.classList.add('show');
     clearTimeout(toastTimer);
@@ -72,7 +72,7 @@
   // Stable per-browser identity (shared with the card game) — lets the
   // server hold our seat across disconnects so a closed tab can resume.
   function clientId() {
-    var id = localStorage.getItem('bh_client_id');
+    let id = localStorage.getItem('bh_client_id');
     if (!id) {
       id = (window.crypto && crypto.randomUUID)
         ? crypto.randomUUID()
@@ -90,7 +90,7 @@
     socket.emit('createRoom', { name: myName(), botDelayMs: botDelay(), mode: gameMode(), clientId: clientId() });
   };
   $('btn-join').onclick = function () {
-    var code = ($('code-input').value || '').trim().toUpperCase();
+    const code = ($('code-input').value || '').trim().toUpperCase();
     if (code.length < 4) return toast('Enter a room code');
     socket.emit('joinRoom', { code: code, name: myName(), clientId: clientId() });
   };
@@ -135,9 +135,9 @@
   // pieces, or an opponent piece that cannot be captured (outside the shared
   // lane, or on a rosette in modes where rosettes are safe).
   function canLand(view, pos) {
-    var occ = view.board && view.board[pos];
+    const occ = view.board && view.board[pos];
     if (!occ || occ.length === 0) return true;
-    var other = occ[0];
+    const other = occ[0];
     if (other.player === view.you) return false;
     if (!SHARED.has(pos)) return false;
     if (view.rosettesSafe && ROSETTES.has(pos)) return false;
@@ -145,25 +145,25 @@
   }
 
   function computeLegalMoves(view) {
-    var map = {};
+    const map = {};
     if (!view.path || view.lastRoll == null) return map;
-    var path = view.path;
-    var roll = view.lastRoll;
+    const path = view.path;
+    const roll = view.lastRoll;
 
-    for (var i = 0; i < view.pieces.length; i++) {
-      var curStep = view.pieces[i].step;
-      var destPos = null;
+    for (let i = 0; i < view.pieces.length; i++) {
+      const curStep = view.pieces[i].step;
+      let destPos = null;
 
       if (curStep === -1) {
         if (roll === 0) continue;
-        var entryPos = path[roll - 1];
+        const entryPos = path[roll - 1];
         if (canLand(view, entryPos)) destPos = entryPos;
       } else {
-        var remaining = path.length - curStep;
+        const remaining = path.length - curStep;
         if (roll === remaining) {
           destPos = -1;
         } else if (roll < remaining) {
-          var dp = path[curStep + roll];
+          const dp = path[curStep + roll];
           if (canLand(view, dp)) destPos = dp;
         }
       }
@@ -182,11 +182,11 @@
     sourceMoveMap = {};
     entryMove = null;
     if (!view.path || view.lastRoll == null) return;
-    var path = view.path;
-    for (var pos in legalMoveMap) {
+    const path = view.path;
+    for (const pos in legalMoveMap) {
       legalMoveMap[pos].forEach(function (pieceIdx) {
-        var step = view.pieces[pieceIdx].step;
-        var destPos = parseInt(pos, 10);
+        const step = view.pieces[pieceIdx].step;
+        const destPos = parseInt(pos, 10);
         if (step === -1) {
           if (!entryMove) entryMove = { piece: pieceIdx, destPos: destPos };
         } else {
@@ -198,14 +198,14 @@
 
   // ── Move preview arrow ───────────────────
   function squareCenter(pos) {
-    var sqEl = document.querySelector('.sq[data-pos="' + pos + '"]');
+    const sqEl = document.querySelector('.sq[data-pos="' + pos + '"]');
     if (!sqEl) return null;
-    var r = sqEl.getBoundingClientRect();
+    const r = sqEl.getBoundingClientRect();
     return { x: r.left + r.width / 2, y: r.top + r.height / 2, rect: r };
   }
 
   function pieceCurrentPos(pieceIdx) {
-    var step = lastView.pieces[pieceIdx].step;
+    const step = lastView.pieces[pieceIdx].step;
     if (step < 0) return null; // at home, not yet on board
     return lastView.path[step];
   }
@@ -214,14 +214,14 @@
   // used as the "prep" spot for pieces entering and the "finish" spot for
   // pieces bearing off, whichever side (left/right) that square is nearer to.
   function marginPoint(squareRect) {
-    var boardRect = $('board').getBoundingClientRect();
-    var tableRect = document.querySelector('.table-ur').getBoundingClientRect();
-    var cx = squareRect.left + squareRect.width / 2;
-    var cy = squareRect.top + squareRect.height / 2;
-    var isLeft = (cx - boardRect.left) < (boardRect.right - cx);
-    var margin = isLeft ? (boardRect.left - tableRect.left) : (tableRect.right - boardRect.right);
-    var offset = Math.max(30, Math.min(squareRect.width * 0.9, margin * 0.6, 90));
-    var x = isLeft ? (boardRect.left - offset) : (boardRect.right + offset);
+    const boardRect = $('board').getBoundingClientRect();
+    const tableRect = document.querySelector('.table-ur').getBoundingClientRect();
+    const cx = squareRect.left + squareRect.width / 2;
+    const cy = squareRect.top + squareRect.height / 2;
+    const isLeft = (cx - boardRect.left) < (boardRect.right - cx);
+    const margin = isLeft ? (boardRect.left - tableRect.left) : (tableRect.right - boardRect.right);
+    const offset = Math.max(30, Math.min(squareRect.width * 0.9, margin * 0.6, 90));
+    const x = isLeft ? (boardRect.left - offset) : (boardRect.right + offset);
     return { x: x, y: cy };
   }
 
@@ -236,32 +236,32 @@
   // the preview arrow can bend through them instead of cutting a straight
   // line across the board.
   function pathWaypoints(fromStep, toStep) {
-    var pts = [];
-    for (var st = fromStep + 1; st <= toStep; st++) {
-      var c = squareCenter(lastView.path[st]);
+    const pts = [];
+    for (let st = fromStep + 1; st <= toStep; st++) {
+      const c = squareCenter(lastView.path[st]);
       if (c) pts.push({ x: c.x, y: c.y });
     }
     return pts;
   }
 
   function showMoveArrow(pieceIdx, destPos) {
-    var curPos = pieceCurrentPos(pieceIdx);
-    var curStep = lastView.pieces[pieceIdx].step;
-    var srcCenter, phantom = null, points;
+    const curPos = pieceCurrentPos(pieceIdx);
+    const curStep = lastView.pieces[pieceIdx].step;
+    let srcCenter, phantom = null, points;
 
     if (destPos === -1) {
       // Bearing off: through whatever squares remain on the path, then out
       // to the finish spot in the margin beside the board.
       srcCenter = squareCenter(curPos);
       if (!srcCenter) return;
-      var remaining = pathWaypoints(curStep, lastView.path.length - 1);
-      var finish = marginPoint(srcCenter.rect);
+      const remaining = pathWaypoints(curStep, lastView.path.length - 1);
+      const finish = marginPoint(srcCenter.rect);
       points = [srcCenter].concat(remaining).concat([finish]);
     } else if (curPos === null) {
       // Entering from home: a piece token sits in the margin beside the
       // board, level with the entry square — a "prep square" just outside
       // the board proper. A direct hop; there's no path yet to trace.
-      var destCenter = squareCenter(destPos);
+      const destCenter = squareCenter(destPos);
       if (!destCenter) return;
       srcCenter = marginPoint(destCenter.rect);
       phantom = srcCenter;
@@ -269,18 +269,18 @@
     } else {
       srcCenter = squareCenter(curPos);
       if (!srcCenter) return;
-      var destStep = pathStepOf(destPos);
-      var hop = destStep > curStep ? pathWaypoints(curStep, destStep) : [squareCenter(destPos)];
+      const destStep = pathStepOf(destPos);
+      const hop = destStep > curStep ? pathWaypoints(curStep, destStep) : [squareCenter(destPos)];
       points = [srcCenter].concat(hop);
     }
 
-    var line = $('move-arrow-line');
+    const line = $('move-arrow-line');
     line.setAttribute(
       'points',
       points.map(function (p) { return p.x + ',' + p.y; }).join(' ')
     );
 
-    var phantomEl = $('move-phantom-piece');
+    const phantomEl = $('move-phantom-piece');
     if (phantom) {
       phantomEl.style.left = phantom.x + 'px';
       phantomEl.style.top = phantom.y + 'px';
@@ -304,19 +304,19 @@
   // side margin — right of the board for player 0 (whose lane is the right
   // column), left for player 1 — then settle on an arrangement matching the
   // actual roll.
-  var diceTimers = [];
+  let diceTimers = [];
 
   function playDiceAnimation(player, roll) {
-    var wrap = $('dice-anim');
-    var board = $('board');
+    const wrap = $('dice-anim');
+    const board = $('board');
     if (!wrap || !board || !document.getElementById('screen-game').classList.contains('active')) return;
 
     diceTimers.forEach(clearTimeout);
     diceTimers = [];
 
-    var boardRect = board.getBoundingClientRect();
-    var tableRect = document.querySelector('.table-ur').getBoundingClientRect();
-    var x = player === 0
+    const boardRect = board.getBoundingClientRect();
+    const tableRect = document.querySelector('.table-ur').getBoundingClientRect();
+    const x = player === 0
       ? (boardRect.right + tableRect.right) / 2
       : (tableRect.left + boardRect.left) / 2;
     wrap.style.left = x + 'px';
@@ -324,21 +324,21 @@
 
     // Mode-aware: Masters throws 3 dice and a zero counts as 4 (shown as
     // three unmarked dice); Finkel/Blitz throw 4.
-    var diceCount = (lastView && lastView.diceCount) || 4;
-    var zeroAs4 = !!(lastView && lastView.zeroAs4);
-    var marks = zeroAs4 && roll === 4 ? 0 : Math.min(roll, diceCount);
+    const diceCount = (lastView && lastView.diceCount) || 4;
+    const zeroAs4 = !!(lastView && lastView.zeroAs4);
+    const marks = zeroAs4 && roll === 4 ? 0 : Math.min(roll, diceCount);
 
-    var dice = Array.prototype.slice.call(wrap.querySelectorAll('.die'), 0, 4);
+    const dice = Array.prototype.slice.call(wrap.querySelectorAll('.die'), 0, 4);
     dice.forEach(function (d, i) {
       d.style.display = i < diceCount ? '' : 'none';
     });
-    var live = dice.slice(0, diceCount);
+    const live = dice.slice(0, diceCount);
     $('dice-total').textContent = '';
     wrap.classList.remove('settled');
     wrap.classList.add('show');
 
     // Tumble phase: randomize rotations and pips every 90ms
-    var elapsed = 0;
+    let elapsed = 0;
     function tumble() {
       live.forEach(function (d) {
         d.style.transform = 'rotate(' + Math.floor(Math.random() * 360) + 'deg)';
@@ -354,13 +354,13 @@
 
     function settle() {
       // Random arrangement with exactly `marks` marked dice
-      var idx = [];
-      for (var k = 0; k < live.length; k++) idx.push(k);
-      for (var i = idx.length - 1; i > 0; i--) {
-        var j = Math.floor(Math.random() * (i + 1));
-        var t = idx[i]; idx[i] = idx[j]; idx[j] = t;
+      const idx = [];
+      for (let k = 0; k < live.length; k++) idx.push(k);
+      for (let i = idx.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        const t = idx[i]; idx[i] = idx[j]; idx[j] = t;
       }
-      var marked = new Set(idx.slice(0, marks));
+      const marked = new Set(idx.slice(0, marks));
       live.forEach(function (d, i2) {
         d.style.transform = 'rotate(' + (Math.floor(Math.random() * 30) - 15) + 'deg)';
         d.classList.toggle('marked', marked.has(i2));
@@ -378,10 +378,10 @@
   function setPendingMove(destPos, pieceIdx) {
     // The square whose click confirms the move: the destination square for a
     // normal move, or the piece's own square for a bear-off (no dest square).
-    var confirmPos = destPos === -1 ? pieceCurrentPos(pieceIdx) : destPos;
+    const confirmPos = destPos === -1 ? pieceCurrentPos(pieceIdx) : destPos;
     pendingMove = { destPos: destPos, piece: pieceIdx, confirmPos: confirmPos };
     document.querySelectorAll('.sq.move-pending').forEach(function (s) { s.classList.remove('move-pending'); });
-    var confirmSq = document.querySelector('.sq[data-pos="' + confirmPos + '"]');
+    const confirmSq = document.querySelector('.sq[data-pos="' + confirmPos + '"]');
     if (confirmSq) confirmSq.classList.add('move-pending');
     showMoveArrow(pieceIdx, destPos);
   }
@@ -398,7 +398,7 @@
     // moved with CSS transitions so every move animates — bots included.
     ensureBoardLayers();
     POSITIONS.forEach(function (p) {
-      var sq = document.querySelector('#squares .sq[data-pos="' + p.id + '"]');
+      const sq = document.querySelector('#squares .sq[data-pos="' + p.id + '"]');
       if (!sq) return;
       sq.classList.toggle('rosette', ROSETTES.has(p.id));
       sq.classList.toggle('shared', !ROSETTES.has(p.id) && SHARED.has(p.id));
@@ -411,14 +411,14 @@
     renderPieces(view);
   }
 
-  var boardLayersBuilt = false;
+  let boardLayersBuilt = false;
   function ensureBoardLayers() {
     if (boardLayersBuilt) return;
-    var board = $('board');
+    const board = $('board');
     board.innerHTML = '<div id="squares"></div><div id="piece-layer"></div>';
-    var wrap = document.getElementById('squares');
+    const wrap = document.getElementById('squares');
     POSITIONS.forEach(function (p) {
-      var sq = document.createElement('div');
+      const sq = document.createElement('div');
       sq.className = 'sq';
       sq.style.left = p.left + '%';
       sq.style.top = p.top + '%';
@@ -431,7 +431,7 @@
   }
 
   // Centre of each square in board-percent coordinates.
-  var POS_CENTER = {};
+  const POS_CENTER = {};
   POSITIONS.forEach(function (p) {
     POS_CENTER[p.id] = { x: p.left + p.w / 2, y: p.top + p.h / 2 };
   });
@@ -445,11 +445,11 @@
     return { x: player === 0 ? 109 : -9, y: 7 };
   }
 
-  var oppMemory = { state: {}, offCount: 0 }; // inferred opponent piece states
+  let oppMemory = { state: {}, offCount: 0 }; // inferred opponent piece states
 
   function getPieceEl(key, playerClass) {
-    var layer = document.getElementById('piece-layer');
-    var el = layer.querySelector('[data-key="' + key + '"]');
+    const layer = document.getElementById('piece-layer');
+    let el = layer.querySelector('[data-key="' + key + '"]');
     if (!el) {
       el = document.createElement('div');
       el.className = 'gpiece ' + playerClass;
@@ -466,13 +466,13 @@
   }
 
   function renderPieces(view) {
-    var me = view.you;
-    var opp = 1 - me;
-    var count = view.pieceCount || 7;
-    var layer = document.getElementById('piece-layer');
+    const me = view.you;
+    const opp = 1 - me;
+    const count = view.pieceCount || 7;
+    const layer = document.getElementById('piece-layer');
 
-    var offNow = view.opponent ? view.opponent.offCount || 0 : 0;
-    var fresh =
+    const offNow = view.opponent ? view.opponent.offCount || 0 : 0;
+    const fresh =
       view.pieces.every(function (p) { return p.step === -1; }) &&
       (!view.board || Object.keys(view.board).length === 0) &&
       offNow === 0;
@@ -482,9 +482,9 @@
     }
 
     // My pieces — identity is exact (step per piece index).
-    var myHomeSlot = 0;
+    let myHomeSlot = 0;
     view.pieces.forEach(function (ps, i) {
-      var el = getPieceEl('m' + i, 'p' + me + ' mine');
+      const el = getPieceEl('m' + i, 'p' + me + ' mine');
       if (ps.step === -1) placePiece(el, homePct(me, myHomeSlot++));
       else if (ps.step >= view.path.length) placePiece(el, exitPct(me), true);
       else placePiece(el, POS_CENTER[view.path[ps.step]]);
@@ -492,7 +492,7 @@
 
     // Opponent pieces — board gives identity; home vs borne-off is inferred
     // from the off-count delta (one move happens per view).
-    var onBoard = {};
+    const onBoard = {};
     if (view.board) {
       Object.keys(view.board).forEach(function (pos) {
         view.board[pos].forEach(function (occ) {
@@ -500,10 +500,10 @@
         });
       });
     }
-    var offDelta = offNow - oppMemory.offCount;
-    var oppHomeSlot = 0;
-    for (var i2 = 0; i2 < count; i2++) {
-      var el2 = getPieceEl('o' + i2, 'p' + opp);
+    let offDelta = offNow - oppMemory.offCount;
+    let oppHomeSlot = 0;
+    for (let i2 = 0; i2 < count; i2++) {
+      const el2 = getPieceEl('o' + i2, 'p' + opp);
       if (onBoard[i2] != null) {
         oppMemory.state[i2] = 'board';
         placePiece(el2, POS_CENTER[onBoard[i2]]);
@@ -522,24 +522,24 @@
   }
 
   function homeDots(n, total) {
-    var dots = '';
-    for (var i = 0; i < (total || 7); i++) {
+    let dots = '';
+    for (let i = 0; i < (total || 7); i++) {
       dots += i < n ? '\u25CF' : '\u25CB';
     }
     return dots;
   }
 
   function filledDots(n) {
-    var dots = '';
-    for (var i = 0; i < n; i++) dots += '\u25CF';
+    let dots = '';
+    for (let i = 0; i < n; i++) dots += '\u25CF';
     return dots;
   }
 
   function renderFinishedTray(containerId, count, playerClass) {
-    var el = $(containerId);
+    const el = $(containerId);
     el.innerHTML = '';
-    for (var i = 0; i < count; i++) {
-      var tok = document.createElement('span');
+    for (let i = 0; i < count; i++) {
+      const tok = document.createElement('span');
       tok.className = 'finished-token ' + playerClass;
       el.appendChild(tok);
     }
@@ -574,14 +574,14 @@
     // Dice / turn
     $('roll-result').textContent = view.lastRoll != null ? String(view.lastRoll) : '';
 
-    var rollBtn = $('btn-roll');
-    var isMyRoll = view.phase === 'roll' && view.turn === view.you;
+    const rollBtn = $('btn-roll');
+    const isMyRoll = view.phase === 'roll' && view.turn === view.you;
     rollBtn.disabled = !isMyRoll;
     rollBtn.textContent = isMyRoll ? 'Roll dice' : 'Wait...';
 
     // Bear-off button
-    var bearOffBtn = $('btn-bear-off');
-    var canBearOff = legalMoveMap && legalMoveMap[-1] && legalMoveMap[-1].length > 0;
+    const bearOffBtn = $('btn-bear-off');
+    const canBearOff = legalMoveMap && legalMoveMap[-1] && legalMoveMap[-1].length > 0;
     if (canBearOff) {
       bearOffBtn.style.display = 'inline-block';
       bearOffBtn.textContent = 'Bear off (' + legalMoveMap[-1].length + ' pieces)';
@@ -590,14 +590,14 @@
     }
 
     // Turn info
-    var turnInfo = $('turn-info');
+    const turnInfo = $('turn-info');
     turnInfo.classList.toggle('you', view.phase !== 'over' && (isMyRoll || view.turn === view.you));
     if (view.phase === 'over') {
       turnInfo.textContent = view.winner === view.you ? 'You win!' : (view.winner === null ? 'Draw!' : view.opponent.name + ' wins!');
     } else if (isMyRoll) {
       turnInfo.textContent = view.extraRoll ? 'Extra roll! Roll again.' : 'Your turn \u2014 roll the dice!';
     } else if (view.turn === view.you) {
-      var numMoves = legalMoveMap ? Object.keys(legalMoveMap).length : 0;
+      const numMoves = legalMoveMap ? Object.keys(legalMoveMap).length : 0;
       if (numMoves > 0) {
         turnInfo.textContent = entryMove
           ? 'Click a piece (or the highlighted entry square) to preview a move, click the highlight to confirm.'
@@ -610,16 +610,16 @@
     }
 
     // My pieces: dots for remaining (not yet borne off) + tokens for finished
-    var myRemaining = view.piecesRemaining || 0;
+    const myRemaining = view.piecesRemaining || 0;
     $('my-home').textContent = filledDots(myRemaining);
     renderFinishedTray('my-finished', (view.pieceCount || 7) - myRemaining, 'p' + view.you);
 
     // Log
-    var logList = $('log-list');
+    const logList = $('log-list');
     logList.innerHTML = '';
     (view.log || []).forEach(function (e) {
-      var li = document.createElement('li');
-      var desc = e.key;
+      const li = document.createElement('li');
+      let desc = e.key;
       if (e.key === 'move') desc = 'P' + e.params.player + ' to pos ' + e.params.pos;
       else if (e.key === 'capture') desc = 'P' + e.params.player + ' captured P' + e.params.opponent;
       else if (e.key === 'bearOff') desc = 'P' + e.params.player + ' bears off';
@@ -644,7 +644,7 @@
 
   $('btn-bear-off').onclick = function () {
     if (!legalMoveMap || !legalMoveMap[-1] || legalMoveMap[-1].length === 0) return;
-    var piece = legalMoveMap[-1][0];
+    const piece = legalMoveMap[-1][0];
     socket.emit('move', { piece: piece, destPos: -1 });
     legalMoveMap = null;
     clearPendingMove();
@@ -657,8 +657,8 @@
   $('board').addEventListener('click', function (e) {
     if (!lastView || lastView.turn !== lastView.you || lastView.phase !== 'move' || !legalMoveMap) return;
 
-    var sq = e.target.closest('.sq');
-    var pos = sq ? parseInt(sq.getAttribute('data-pos')) : NaN;
+    const sq = e.target.closest('.sq');
+    const pos = sq ? parseInt(sq.getAttribute('data-pos')) : NaN;
     if (isNaN(pos)) { clearPendingMove(); return; }
 
     // Confirm: click on the pending highlight (dest square, or the piece's
@@ -686,7 +686,7 @@
   });
 
   // ── Lobby ────────────────────────────────
-  var MODE_LABELS = {
+  const MODE_LABELS = {
     finkel: 'Finkel — classic: 7 pieces, rosettes are safe',
     masters: 'Masters — longer path, 3 dice (0 = 4), rosettes unsafe',
     blitz: 'Blitz — 5 pieces, captures grant an extra roll',
@@ -695,13 +695,13 @@
   function renderLobby(payload) {
     $('lobby-code').textContent = payload.code;
     $('lobby-mode').textContent = 'Rules: ' + (MODE_LABELS[payload.mode] || MODE_LABELS.finkel);
-    var list = $('seat-list');
+    const list = $('seat-list');
     list.innerHTML = '';
     payload.seats.forEach(function (s) {
-      var li = document.createElement('li');
+      const li = document.createElement('li');
       li.className = 'seat';
-      var host = s.sid === payload.hostId ? ' [HOST]' : '';
-      var you = s.sid === socket.id ? ' [YOU]' : '';
+      const host = s.sid === payload.hostId ? ' [HOST]' : '';
+      const you = s.sid === socket.id ? ' [YOU]' : '';
       li.textContent = s.name + host + you + (s.isBot ? ' (BOT)' : '');
       list.appendChild(li);
     });
@@ -710,7 +710,7 @@
   }
 
   $('btn-copy').onclick = function () {
-    var code = $('lobby-code').textContent;
+    const code = $('lobby-code').textContent;
     navigator.clipboard.writeText(code).then(function () { toast('Copied!'); }).catch(function () { toast(code); });
   };
 
@@ -749,8 +749,8 @@
   // A ?join=CODE in the URL (arriving from the card game's redirect) joins
   // that room as soon as the socket is up; otherwise ask the server whether
   // this browser has a seat to come back to.
-  var pendingJoin = null;
-  var joinParam = new URLSearchParams(window.location.search).get('join');
+  let pendingJoin = null;
+  const joinParam = new URLSearchParams(window.location.search).get('join');
   if (joinParam) {
     pendingJoin = joinParam.trim().toUpperCase();
     $('code-input').value = pendingJoin;
@@ -758,7 +758,7 @@
   }
   socket.on('connect', function () {
     if (pendingJoin) {
-      var code = pendingJoin;
+      const code = pendingJoin;
       pendingJoin = null;
       socket.emit('joinRoom', { code: code, name: myName(), clientId: clientId() });
       return;

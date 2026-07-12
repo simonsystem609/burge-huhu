@@ -1,6 +1,6 @@
 'use strict';
 
-const { createGame, rollDice, legalMoves, applyMove, currentActor, PIECE_COUNT } = require('../game/ur/engine');
+const { createGame, rollDice, legalMoves, applyMove, currentActor } = require('../game/ur/engine');
 const { chooseMove } = require('../game/ur/bot');
 
 function playOneGame() {

@@ -10,7 +10,7 @@
 (function () {
   'use strict';
 
-  var HINTS = {
+  const HINTS = {
     hu: {
       ios: 'iPhone/iPad: koppints a Megosztás gombra (⬆️), majd válaszd: "Kezdőképernyőhöz adás".',
       fallback: 'Keresd a böngésző menujében (⌘) az "Alkalmazás telepítése" lehetőséget.',
@@ -22,19 +22,19 @@
   };
 
   function lang() {
-    var l = (document.documentElement.lang || 'en').slice(0, 2).toLowerCase();
+    const l = (document.documentElement.lang || 'en').slice(0, 2).toLowerCase();
     return HINTS[l] ? l : 'en';
   }
 
-  var deferredPrompt = null;
-  var isStandalone =
+  let deferredPrompt = null;
+  const isStandalone =
     window.matchMedia('(display-mode: standalone)').matches ||
     window.navigator.standalone === true;
-  var isIOS = /iphone|ipad|ipod/i.test(window.navigator.userAgent) && !window.MSStream;
+  const isIOS = /iphone|ipad|ipod/i.test(window.navigator.userAgent) && !window.MSStream;
 
-  var toastTimer = null;
+  let toastTimer = null;
   function toast(msg) {
-    var el = document.getElementById('toast');
+    const el = document.getElementById('toast');
     if (!el) return;
     el.textContent = msg;
     el.classList.add('show');
@@ -74,15 +74,15 @@
   });
 
   document.addEventListener('click', function (e) {
-    var btn = e.target.closest && e.target.closest('[data-install-app]');
+    const btn = e.target.closest && e.target.closest('[data-install-app]');
     if (!btn) return;
     if (deferredPrompt) {
-      var dp = deferredPrompt;
+      const dp = deferredPrompt;
       deferredPrompt = null; // the prompt event is one-shot per spec
       dp.prompt();
       return;
     }
-    var h = HINTS[lang()];
+    const h = HINTS[lang()];
     toast(isIOS ? h.ios : h.fallback);
   });
 })();

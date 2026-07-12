@@ -5,6 +5,9 @@
     "es2021": true,
     "node": true
   },
+  "globals": {
+    "io": "readonly"
+  },
   "extends": "eslint:recommended",
   "parserOptions": {
     "ecmaVersion": "latest",
