@@ -180,6 +180,12 @@ input:focus, select:focus { outline: 2px solid #d4a060; }
 }
 
 .turn-info { font-size: 0.95rem; color: #a08060; min-height: 1.5em; text-align: center; }
+.turn-info.you { font-weight: 800; animation: turnFlash 0.7s linear infinite; }
+@keyframes turnFlash {
+  0%, 45% { color: #ff3b3b; text-shadow: 0 0 10px rgba(255,59,59,0.85); }
+  50%, 95% { color: #ffd9d9; text-shadow: 0 0 4px rgba(255,255,255,0.35); }
+  100% { color: #ff3b3b; text-shadow: 0 0 10px rgba(255,59,59,0.85); }
+}
 
 /* Side log */
 .sidelog {
@@ -217,7 +223,7 @@ input:focus, select:focus { outline: 2px solid #d4a060; }
 }
 #move-overlay.show { display: block; }
 #move-arrow-line {
-  stroke: #f39c12; stroke-width: 3; stroke-linecap: round;
+  fill: none; stroke: #f39c12; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round;
   filter: drop-shadow(0 0 4px rgba(243,156,18,0.7));
 }
 #move-arrowhead polygon { fill: #f39c12; }

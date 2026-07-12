@@ -386,14 +386,18 @@
     return { x: a.hand.x + a.hand.w / 2, y: a.hand.y + a.hand.h / 2, scale: s, z: Z.flight };
   }
   // Mirrors stagedPos, but anchored to an OPPONENT's fan instead of my own
-  // hand — where their live attack-staging preview cards float.
+  // hand — where their live attack-staging preview cards float. My own
+  // staging lifts cards UP, toward the table, because my hand sits at the
+  // bottom of the screen. An opponent's fan sits at the TOP, so "toward the
+  // table" for them is DOWN — the opposite sign, or the cards fly off the
+  // top of the viewport instead of settling into view.
   function remoteStagedPos(fr, s, j, m) {
     const fscale = PILE_SCALE * s;
     const cw = CW * fscale;
     const step = cw * 0.55;
     const total = cw + step * (m - 1);
     const x0 = fr.x + (fr.w - total) / 2 + cw / 2;
-    return { x: x0 + j * step, y: fr.y - (CH * fscale) / 2, scale: fscale, z: Z.staged + j };
+    return { x: x0 + j * step, y: fr.y + fr.h + CH * fscale * 0.42, scale: fscale, z: Z.staged + j };
   }
 
   // Display order for my hand: trump suit first, then the other suits.

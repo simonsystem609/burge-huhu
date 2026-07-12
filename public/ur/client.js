@@ -212,36 +212,60 @@
     return { x: x, y: cy };
   }
 
+  // Step index of a board position within the CURRENT piece's path (the two
+  // players' paths differ), or -1 if it isn't on it.
+  function pathStepOf(pos) {
+    return lastView.path.indexOf(pos);
+  }
+
+  // Centers of every square from fromStep+1 through toStep, inclusive, in
+  // path order — the squares a piece actually crosses making this move, so
+  // the preview arrow can bend through them instead of cutting a straight
+  // line across the board.
+  function pathWaypoints(fromStep, toStep) {
+    var pts = [];
+    for (var st = fromStep + 1; st <= toStep; st++) {
+      var c = squareCenter(lastView.path[st]);
+      if (c) pts.push({ x: c.x, y: c.y });
+    }
+    return pts;
+  }
+
   function showMoveArrow(pieceIdx, destPos) {
     var curPos = pieceCurrentPos(pieceIdx);
-    var srcCenter, destCenter, phantom = null;
+    var curStep = lastView.pieces[pieceIdx].step;
+    var srcCenter, phantom = null, points;
 
     if (destPos === -1) {
-      // Bearing off: arrow from the piece's square out to the finish spot
-      // in the margin beside the board.
+      // Bearing off: through whatever squares remain on the path, then out
+      // to the finish spot in the margin beside the board.
       srcCenter = squareCenter(curPos);
       if (!srcCenter) return;
-      destCenter = marginPoint(srcCenter.rect);
-    } else {
-      destCenter = squareCenter(destPos);
+      var remaining = pathWaypoints(curStep, lastView.path.length - 1);
+      var finish = marginPoint(srcCenter.rect);
+      points = [srcCenter].concat(remaining).concat([finish]);
+    } else if (curPos === null) {
+      // Entering from home: a piece token sits in the margin beside the
+      // board, level with the entry square — a "prep square" just outside
+      // the board proper. A direct hop; there's no path yet to trace.
+      var destCenter = squareCenter(destPos);
       if (!destCenter) return;
-      if (curPos === null) {
-        // Entering from home: a piece token sits in the margin beside the
-        // board, level with the entry square — a "prep square" just outside
-        // the board proper.
-        srcCenter = marginPoint(destCenter.rect);
-        phantom = srcCenter;
-      } else {
-        srcCenter = squareCenter(curPos);
-        if (!srcCenter) return;
-      }
+      srcCenter = marginPoint(destCenter.rect);
+      phantom = srcCenter;
+      points = [srcCenter, destCenter];
+    } else {
+      srcCenter = squareCenter(curPos);
+      if (!srcCenter) return;
+      var destStep = pathStepOf(destPos);
+      var hop = destStep > curStep ? pathWaypoints(curStep, destStep) : [squareCenter(destPos)];
+      points = [srcCenter].concat(hop);
     }
 
     var line = $('move-arrow-line');
-    line.setAttribute('x1', srcCenter.x);
-    line.setAttribute('y1', srcCenter.y);
-    line.setAttribute('x2', destCenter.x);
-    line.setAttribute('y2', destCenter.y);
+    line.setAttribute(
+      'points',
+      points.map(function (p) { return p.x + ',' + p.y; }).join(' ')
+    );
 
     var phantomEl = $('move-phantom-piece');
     if (phantom) {
@@ -554,6 +578,7 @@
 
     // Turn info
     var turnInfo = $('turn-info');
+    turnInfo.classList.toggle('you', view.phase !== 'over' && (isMyRoll || view.turn === view.you));
     if (view.phase === 'over') {
       turnInfo.textContent = view.winner === view.you ? 'You win!' : (view.winner === null ? 'Draw!' : view.opponent.name + ' wins!');
     } else if (isMyRoll) {
