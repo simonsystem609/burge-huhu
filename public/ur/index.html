@@ -56,6 +56,8 @@
         <div class="menu-actions">
           <button id="btn-single" class="primary">Singleplayer (vs bot)</button>
           <div class="divider"></div>
+          <button id="btn-matchmake" class="primary">Find match</button>
+          <div class="divider"></div>
           <button id="btn-create">Create room</button>
           <div class="join-row">
             <input id="code-input" type="text" maxlength="4" placeholder="ROOM CODE" />
@@ -130,6 +132,18 @@
       <div class="overlay-actions">
         <button id="btn-rematch" class="primary">Rematch</button>
         <button id="btn-menu" class="ghost">Menu</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MATCHMAKING SEARCH -->
+  <div id="search-modal" class="overlay">
+    <div class="overlay-card">
+      <h2>Finding an opponent…</h2>
+      <div class="spinner"></div>
+      <p class="hint">Waiting for another player…</p>
+      <div class="overlay-actions">
+        <button id="btn-cancel-match" class="ghost">Cancel</button>
       </div>
     </div>
   </div>

@@ -94,6 +94,19 @@
     if (code.length < 4) return toast('Enter a room code');
     socket.emit('joinRoom', { code: code, name: myName(), clientId: clientId() });
   };
+
+  // ── Matchmaking ─────────────────────────
+  function showSearch(on) {
+    $('search-modal').classList.toggle('show', on);
+  }
+  $('btn-matchmake').onclick = function () {
+    showSearch(true);
+    socket.emit('findMatch', { name: myName(), botDelayMs: botDelay(), mode: gameMode(), clientId: clientId() });
+  };
+  $('btn-cancel-match').onclick = function () {
+    socket.emit('cancelMatch');
+    showSearch(false);
+  };
   $('code-input').addEventListener('keydown', function (e) {
     if (e.key === 'Enter') $('btn-join').click();
   });
@@ -709,7 +722,12 @@
   socket.on('rolled', function (data) {
     playDiceAnimation(data.player, data.roll);
   });
-  socket.on('errorMsg', function (msg) { toast(msg); });
+  socket.on('errorMsg', function (msg) { showSearch(false); toast(msg); });
+  // Matchmaking: the searching modal stays up until matched, cancelled, or
+  // the connection drops.
+  socket.on('matchSearching', function () { showSearch(true); });
+  socket.on('matched', function () { showSearch(false); });
+  socket.on('matchCancelled', function () { showSearch(false); });
   // The code belongs to a card-game room — hop over there with the code
   // prefilled so the join completes automatically.
   socket.on('wrongGame', function (d) {
@@ -726,7 +744,7 @@
     if (d && d.game === 'cards') window.location.href = '/';
   });
 
-  socket.on('disconnect', function () { toast('Connection lost. Reconnecting...'); });
+  socket.on('disconnect', function () { showSearch(false); toast('Connection lost. Reconnecting...'); });
 
   // A ?join=CODE in the URL (arriving from the card game's redirect) joins
   // that room as soon as the socket is up; otherwise ask the server whether

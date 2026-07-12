@@ -128,6 +128,19 @@
     if (e.key === 'Enter') $('btn-join').click();
   });
 
+  // ── Matchmaking ──────────────────────────────────────────────────
+  function showSearch(on) {
+    $('search-modal').classList.toggle('show', on);
+  }
+  $('btn-matchmake').onclick = () => {
+    showSearch(true);
+    socket.emit('findMatch', { name: myName(), lang, botDelayMs: myBotDelay(), clientId: clientId() });
+  };
+  $('btn-cancel-match').onclick = () => {
+    socket.emit('cancelMatch');
+    showSearch(false);
+  };
+
   // ── Lobby ────────────────────────────────────────────────────────
   $('btn-addbot').onclick = () => socket.emit('addBot');
   $('btn-start').onclick = () => socket.emit('startGame');
@@ -1523,7 +1536,15 @@
     remotePreview = d;
     settle(sceneView, false);
   });
-  socket.on('errorMsg', (code) => toast(t(lang, 'err_' + code) || t(lang, 'err_generic')));
+  socket.on('errorMsg', (code) => {
+    showSearch(false);
+    toast(t(lang, 'err_' + code) || t(lang, 'err_generic'));
+  });
+  // Matchmaking: the searching modal stays up until we're matched, cancel,
+  // or the connection drops.
+  socket.on('matchSearching', () => showSearch(true));
+  socket.on('matched', () => showSearch(false));
+  socket.on('matchCancelled', () => showSearch(false));
   // The code belongs to a Royal Game of Ur room — hop over there with the
   // code prefilled so the join completes automatically.
   socket.on('wrongGame', ({ code } = {}) => {
@@ -1565,6 +1586,7 @@
     socket.emit('resume', { clientId: clientId() });
   });
   socket.on('disconnect', () => {
+    showSearch(false);
     toast(t(lang, 'disconnected'));
   });
 

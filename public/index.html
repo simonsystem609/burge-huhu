@@ -79,6 +79,10 @@
 
             <div class="divider"></div>
 
+            <button id="btn-matchmake" class="primary" data-i18n="matchmake">Ellenfél keresése</button>
+
+            <div class="divider"></div>
+
             <button id="btn-create" class="primary" data-i18n="create">Szoba létrehozása</button>
 
             <div class="join-row">
@@ -180,6 +184,18 @@
         <div id="rules-body" class="rules-body"></div>
         <div class="overlay-actions">
           <button id="btn-rules-close" class="primary">OK</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MATCHMAKING SEARCH -->
+    <div id="search-modal" class="overlay">
+      <div class="overlay-card">
+        <h2 data-i18n="searching">Ellenfél keresése…</h2>
+        <div class="spinner"></div>
+        <p class="hint" data-i18n="searchingHint">Várakozás másik játékosra…</p>
+        <div class="overlay-actions">
+          <button id="btn-cancel-match" class="ghost" data-i18n="cancel">Mégse</button>
         </div>
       </div>
     </div>

@@ -23,6 +23,17 @@ const io = new Server(server, { cors: { origin: '*' } });
 const urRooms = new Map(); // code → ur room state
 const rm = new RoomManager({ isCodeTaken: (code) => urRooms.has(code) });
 
+// Matchmaking waiting rooms — one queue per game. Each entry is a player who
+// pressed "Find match" and is waiting for another; the next searcher pairs
+// with the head of the queue into a fresh 2-player game.
+const cardQueue = []; // [{ socketId, clientId, name, lang, botDelayMs }]
+const urQueue = [];   // [{ socketId, clientId, name, botDelayMs, mode }]
+
+function dequeue(queue, socketId) {
+  const i = queue.findIndex((e) => e.socketId === socketId);
+  if (i !== -1) queue.splice(i, 1);
+}
+
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/healthz', (_req, res) => res.type('text').send('ok'));
 
@@ -166,6 +177,45 @@ io.on('connection', (socket) => {
     driveBots(room.code);
   });
 
+  // Matchmaking: pair with another searching player into a fresh 2-player
+  // game, or wait in the queue until one arrives.
+  socket.on('findMatch', ({ name, lang, botDelayMs, clientId } = {}) => {
+    if (rm.findRoomBySocket(socket.id)) return socket.emit('errorMsg', 'already_in_room');
+    rm.forgetClient(clientId);
+    dequeue(cardQueue, socket.id); // no duplicate entries for this socket
+
+    let opp = null;
+    while (cardQueue.length) {
+      const cand = cardQueue.shift();
+      const s = socketOf(cand.socketId);
+      if (s && cand.socketId !== socket.id && cand.clientId !== clientId) { opp = cand; break; }
+    }
+
+    if (!opp) {
+      cardQueue.push({ socketId: socket.id, clientId: clientId || null, name, lang, botDelayMs });
+      return socket.emit('matchSearching');
+    }
+
+    const room = rm.createRoom(opp.socketId, opp.clientId, opp.name, opp.lang || 'hu');
+    room.botDelay = Number(opp.botDelayMs) || DEFAULT_BOT_DELAY;
+    const res = rm.joinRoom(room.code, socket.id, clientId, name);
+    if (res.error) {
+      cardQueue.push({ socketId: socket.id, clientId: clientId || null, name, lang, botDelayMs });
+      return socket.emit('matchSearching');
+    }
+    rm.startGame(room);
+    gamelog.logStart(room);
+    socketOf(opp.socketId)?.emit('matched', { code: room.code });
+    socket.emit('matched', { code: room.code });
+    emitGame(room);
+    driveBots(room.code);
+  });
+
+  socket.on('cancelMatch', () => {
+    dequeue(cardQueue, socket.id);
+    socket.emit('matchCancelled');
+  });
+
   socket.on('addBot', () => {
     const room = rm.findRoomBySocket(socket.id);
     if (!room || socket.id !== room.hostId) return;
@@ -266,6 +316,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
+    dequeue(cardQueue, socket.id);
     const info = rm.handleDisconnect(socket.id);
     if (info && info.room && !info.paused) {
       if (info.room.started) {
@@ -280,6 +331,7 @@ io.on('connection', (socket) => {
   // Deliberate exit (switching games): give up every seat this browser
   // holds in BOTH games so resume won't drag it back.
   socket.on('abandon', ({ clientId } = {}) => {
+    dequeue(cardQueue, socket.id);
     const info = rm.leaveRoom(socket.id);
     if (info && info.room && !info.ended) {
       if (info.room.started) {
@@ -531,6 +583,58 @@ urIo.on('connection', (socket) => {
     urDriveBots(code);
   });
 
+  // Matchmaking: pair with another searching player into a fresh 2-player
+  // game (using the waiting player's chosen mode), or wait in the queue.
+  socket.on('findMatch', ({ name, botDelayMs, mode, clientId } = {}) => {
+    const inRoom = [...urRooms.values()].some((r) => r.seats.some((s) => s.socketId === socket.id));
+    if (inRoom) return socket.emit('errorMsg', 'Already in a room');
+    urForgetClient(clientId);
+    dequeue(urQueue, socket.id);
+
+    let opp = null;
+    while (urQueue.length) {
+      const cand = urQueue.shift();
+      const s = urIo.sockets.get(cand.socketId);
+      if (s && cand.socketId !== socket.id && cand.clientId !== clientId) { opp = cand; break; }
+    }
+
+    if (!opp) {
+      urQueue.push({ socketId: socket.id, clientId: clientId || null, name, botDelayMs, mode: urCleanMode(mode) });
+      return socket.emit('matchSearching');
+    }
+
+    const code = urMakeCode();
+    const cleanMode = opp.mode || 'finkel';
+    const room = {
+      code,
+      hostId: opp.socketId,
+      hostClientId: opp.clientId || null,
+      mode: cleanMode,
+      botDelay: Number(opp.botDelayMs) || 1100,
+      seats: [
+        { name: opp.name || 'Player', isBot: false, socketId: opp.socketId, clientId: opp.clientId || null, playerIdx: 0 },
+        { name: name || 'Player', isBot: false, socketId: socket.id, clientId: clientId || null, playerIdx: 1 },
+      ],
+      game: null,
+      emptySince: null,
+    };
+    room.game = urEngine.createGame(
+      room.seats.map((s, i) => ({ id: 'p' + i, name: s.name, isBot: s.isBot })),
+      undefined,
+      cleanMode
+    );
+    urRooms.set(code, room);
+    urIo.sockets.get(opp.socketId)?.emit('matched', { code });
+    socket.emit('matched', { code });
+    urEmitGame(room);
+    urDriveBots(code);
+  });
+
+  socket.on('cancelMatch', () => {
+    dequeue(urQueue, socket.id);
+    socket.emit('matchCancelled');
+  });
+
   socket.on('startGame', () => {
     const room = urRooms.get([...urRooms.entries()].find(([, r]) => r.hostId === socket.id)?.[0]);
     if (!room || room.hostId !== socket.id) return;
@@ -665,6 +769,7 @@ urIo.on('connection', (socket) => {
 
   // Deliberate exit (switching games): drop every seat in both games.
   socket.on('abandon', ({ clientId } = {}) => {
+    dequeue(urQueue, socket.id);
     urLeave(socket.id);
     urForgetClient(clientId);
     rm.forgetClient(clientId);
@@ -715,6 +820,7 @@ urIo.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
+    dequeue(urQueue, socket.id);
     urDisconnect(socket.id);
   });
 });
