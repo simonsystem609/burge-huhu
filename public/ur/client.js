@@ -42,6 +42,13 @@
   let entryMove = null;      // { piece, destPos } if a home piece can enter
   let pendingMove = null;    // { destPos, piece, srcPos } — set on first click, confirmed on second
 
+  // While a dice animation is tumbling, the roll's outcome (and anything it
+  // reveals — legal moves, whose turn it is) must not appear before the dice
+  // actually land, or the animation is just decoration. Any 'game' update
+  // that arrives mid-tumble is held and applied the instant the dice settle.
+  let rollRevealPending = false;
+  let pendingGameView = null;
+
   function showScreen(id) {
     document.querySelectorAll('.screen').forEach(function (s) {
       s.classList.toggle('active', s.id === id);
@@ -314,6 +321,9 @@
     diceTimers.forEach(clearTimeout);
     diceTimers = [];
 
+    rollRevealPending = true;
+    $('btn-roll').disabled = true; // block a second roll while this one is still tumbling
+
     const boardRect = board.getBoundingClientRect();
     const tableRect = document.querySelector('.table-ur').getBoundingClientRect();
     const x = player === 0
@@ -367,6 +377,15 @@
       });
       $('dice-total').textContent = String(roll);
       wrap.classList.add('settled');
+
+      // The dice have landed — now it's safe to reveal whatever this roll
+      // unlocked (legal moves, turn changes, etc.), synced to this instant.
+      rollRevealPending = false;
+      if (pendingGameView) {
+        const view = pendingGameView;
+        pendingGameView = null;
+        render(view);
+      }
       diceTimers.push(setTimeout(function () {
         wrap.classList.remove('show', 'settled');
       }, 1600));
@@ -717,7 +736,11 @@
   // ── Socket events ────────────────────────
   socket.on('lobby', renderLobby);
   socket.on('game', function (data) {
-    render(data.view);
+    if (rollRevealPending) {
+      pendingGameView = data.view; // hold it — the dice haven't landed yet
+    } else {
+      render(data.view);
+    }
   });
   socket.on('rolled', function (data) {
     playDiceAnimation(data.player, data.roll);

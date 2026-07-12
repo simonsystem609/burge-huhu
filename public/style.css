@@ -76,11 +76,15 @@ button.small { padding: 6px 10px; font-size: 0.85em; }
 /* Menu / lobby cards */
 .menu-card {
   width: min(480px, 100%);
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   background: linear-gradient(180deg, var(--panel-2), var(--panel));
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--radius);
   padding: 24px;
   box-shadow: var(--shadow);
+  overflow: hidden;
 }
 .menu-card h1 { margin: 0; font-size: 2rem; color: var(--gold); }
 .install-btn {
@@ -91,7 +95,7 @@ button.small { padding: 6px 10px; font-size: 0.85em; }
 .install-btn:hover { border-style: solid; background: rgba(229, 181, 58, 0.08); }
 .menu-card h2 { margin: 0 0 12px; color: var(--gold); }
 .subtitle { color: var(--muted); margin: 4px 0 20px; }
-.field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; min-width: 0; }
 .field.inline { flex-direction: row; align-items: center; gap: 10px; margin-bottom: 0; }
 .field > span { color: var(--muted); font-size: 0.9em; }
 input, select {
@@ -101,7 +105,13 @@ input, select {
   border: 1px solid rgba(255, 255, 255, 0.16);
   background: #0c160f;
   color: var(--ink);
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
+select { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.field.inline select, .field.inline input { flex: 1 1 auto; min-width: 0; width: auto; }
 input:focus, select:focus { outline: 2px solid var(--accent); }
 #code-input { text-transform: uppercase; letter-spacing: 3px; text-align: center; }
 

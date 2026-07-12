@@ -34,8 +34,9 @@ button.ghost { background: transparent; border-color: transparent; color: #d4a06
 button.small { padding: 6px 10px; font-size: 0.85em; }
 
 .menu-card {
-  width: min(440px, 100%); background: #2a1a10; border: 2px solid #5a3a20;
-  border-radius: 12px; padding: 24px;
+  width: min(440px, 100%); max-width: 100%; min-width: 0; box-sizing: border-box;
+  background: #2a1a10; border: 2px solid #5a3a20;
+  border-radius: 12px; padding: 24px; overflow: hidden;
 }
 .menu-card h1 { margin: 0; font-size: 1.8rem; color: #d4a060; }
 .install-btn {
@@ -46,13 +47,16 @@ button.small { padding: 6px 10px; font-size: 0.85em; }
 .install-btn:hover { background: rgba(212, 160, 96, 0.1); }
 .menu-card h2 { margin: 0 0 12px; color: #d4a060; }
 .subtitle { color: #a08060; margin: 4px 0 20px; }
-.field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; min-width: 0; }
 .field.inline { flex-direction: row; align-items: center; gap: 10px; margin-bottom: 0; }
 .field > span { color: #a08060; font-size: 0.9em; }
 input, select {
   font: inherit; padding: 10px 12px; border-radius: 8px;
   border: 1px solid #5a3a20; background: #1a1410; color: #d4a060;
+  width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box;
 }
+select { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.field.inline select, .field.inline input { flex: 1 1 auto; min-width: 0; width: auto; }
 input:focus, select:focus { outline: 2px solid #d4a060; }
 #code-input { text-transform: uppercase; letter-spacing: 3px; text-align: center; }
 .menu-actions { display: flex; flex-direction: column; gap: 12px; }
