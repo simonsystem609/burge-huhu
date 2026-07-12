@@ -112,3 +112,7 @@ npm run dev      # auto-restart on file changes
 ```
 
 CI runs `npm test` and `npm run lint` on every push via GitHub Actions.
+
+## License
+Code is [MIT](LICENSE). Image assets are licensed separately — see
+[MEDIA-LICENSES.md](MEDIA-LICENSES.md).
