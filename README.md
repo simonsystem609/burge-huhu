@@ -97,6 +97,13 @@ Socket.io needs a long-lived connection.
 ## Env vars
 - `PORT` — server port (default 3000; set by the host).
 - `BOT_DELAY_MS` — delay between bot moves in ms (default 850).
+- `ALLOWED_ORIGIN` — restricts Socket.IO's CORS to this origin (comma-separate for more
+  than one), e.g. `https://your-app.onrender.com`. Unset by default, which stays fully
+  permissive (`*`) — set this once you know your deployed URL to lock it down.
+- `MAX_ROOMS` — hard cap on total rooms across both games (default 500), to bound memory
+  growth from room spam.
+- `GAME_LOG` — `1`/`0` to force the local training-log writer on/off, overriding the
+  default (on outside Render, off on Render — see `game/gamelog.js`).
 
 ## Reconnection
 If your connection drops mid-game, the client automatically tries to rejoin. A bot

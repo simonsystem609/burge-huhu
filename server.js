@@ -3,19 +3,32 @@
 const path = require('path');
 const http = require('http');
 const express = require('express');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const { Server } = require('socket.io');
 
 const { RoomManager, MAX_SEATS } = require('./game/rooms');
 const { applyMove, currentActor, viewFor } = require('./game/engine');
 const { chooseMove } = require('./game/bot');
 const gamelog = require('./game/gamelog');
+const { socketRateLimiter, validateName, validateClientId } = require('./game/security');
 
 const PORT = process.env.PORT || 3000;
 const DEFAULT_BOT_DELAY = Number(process.env.BOT_DELAY_MS || 800);
+const MAX_ROOMS = Number(process.env.MAX_ROOMS || 500);
+
+// Same-origin by default (safe: never breaks a same-origin deploy). Set
+// ALLOWED_ORIGIN on the host (e.g. https://your-app.onrender.com, comma-
+// separated for more than one) to restrict cross-origin socket connections;
+// unset it and this stays exactly as permissive as before.
+const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN
+  ? process.env.ALLOWED_ORIGIN.split(',').map((s) => s.trim())
+  : '*';
 
 const app = express();
+app.disable('x-powered-by');
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: '*' } });
+const io = new Server(server, { cors: { origin: ALLOWED_ORIGIN } });
 
 // The card game and the Royal Game of Ur keep fully separate room maps, but
 // share one code space: a code can never mean two different rooms, so a join
@@ -33,6 +46,60 @@ function dequeue(queue, socketId) {
   const i = queue.findIndex((e) => e.socketId === socketId);
   if (i !== -1) queue.splice(i, 1);
 }
+
+function totalRoomCount() {
+  return rm.rooms.size + urRooms.size;
+}
+
+function urFindRoomBySocket(socketId) {
+  for (const room of urRooms.values()) {
+    if (room.seats.some((s) => s.socketId === socketId)) return room;
+  }
+  return null;
+}
+
+// Behind Render's (or any) reverse proxy, req.ip / socket.handshake.address
+// only reflect the real client IP if we trust X-Forwarded-For.
+app.set('trust proxy', 1);
+
+// Per-IP cap on new socket connections, and a per-socket cap on the
+// spam-prone room/matchmaking events (creating, joining, searching) —
+// independent of the room count itself, since without this a single socket
+// could otherwise hammer the server with events all day even while under
+// the room cap (each one gets cleaned up, but the churn itself is the cost).
+const connectionLimiter = socketRateLimiter(30, 60 * 1000); // 30 new sockets / IP / min
+const roomActionLimiter = socketRateLimiter(10, 30 * 1000); // 10 room actions / socket / 30s
+
+function connectionGuard(socket, next) {
+  if (!connectionLimiter(socket.handshake.address)) {
+    return next(new Error('rate_limited'));
+  }
+  next();
+}
+io.use(connectionGuard);
+// urIo.use(connectionGuard) is wired in below, once the /ur namespace exists.
+
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ['\'self\''],
+      scriptSrc: ['\'self\''],
+      styleSrc: ['\'self\'', '\'unsafe-inline\''],
+      imgSrc: ['\'self\'', 'data:'],
+      connectSrc: ['\'self\''],
+      fontSrc: ['\'self\''],
+      objectSrc: ['\'none\''],
+      baseUri: ['\'self\''],
+      formAction: ['\'self\''],
+    },
+  },
+}));
+
+// Static assets and the health check are cheap and same-origin; this is just
+// a backstop against basic HTTP flooding, not the main defense (that's the
+// per-socket-event limiter below — most of this app's traffic is WebSocket,
+// not HTTP).
+app.use(rateLimit({ windowMs: 60 * 1000, max: 600, standardHeaders: true, legacyHeaders: false }));
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/healthz', (_req, res) => res.type('text').send('ok'));
@@ -139,8 +206,12 @@ function emitPreview(room, fromSeatIdx, payload) {
 
 io.on('connection', (socket) => {
   socket.on('createRoom', ({ name, lang, botDelayMs, clientId } = {}) => {
+    if (!roomActionLimiter(socket.id)) return socket.emit('errorMsg', 'rate_limited');
     const existing = rm.findRoomBySocket(socket.id);
     if (existing) return socket.emit('errorMsg', 'already_in_room');
+    if (totalRoomCount() >= MAX_ROOMS) return socket.emit('errorMsg', 'server_full');
+    name = validateName(name);
+    clientId = validateClientId(clientId);
     rm.forgetClient(clientId); // starting fresh abandons any stale seat
     const room = rm.createRoom(socket.id, clientId, name, lang || 'hu');
     room.botDelay = Number(botDelayMs) || DEFAULT_BOT_DELAY;
@@ -149,7 +220,10 @@ io.on('connection', (socket) => {
   });
 
   socket.on('joinRoom', ({ code, name, clientId } = {}) => {
-    const clean = String(code || '').trim().toUpperCase();
+    if (!roomActionLimiter(socket.id)) return socket.emit('errorMsg', 'rate_limited');
+    const clean = String(code || '').trim().toUpperCase().slice(0, 8);
+    name = validateName(name);
+    clientId = validateClientId(clientId);
     rm.forgetClient(clientId);
     const res = rm.joinRoom(clean, socket.id, clientId, name);
     if (res.error) {
@@ -163,8 +237,12 @@ io.on('connection', (socket) => {
   });
 
   socket.on('singleplayer', ({ name, lang, bots, botDelayMs, clientId } = {}) => {
+    if (!roomActionLimiter(socket.id)) return socket.emit('errorMsg', 'rate_limited');
     const existing = rm.findRoomBySocket(socket.id);
     if (existing) return socket.emit('errorMsg', 'already_in_room');
+    if (totalRoomCount() >= MAX_ROOMS) return socket.emit('errorMsg', 'server_full');
+    name = validateName(name);
+    clientId = validateClientId(clientId);
     rm.forgetClient(clientId);
     const room = rm.createRoom(socket.id, clientId, name, lang || 'hu', { single: true });
     room.botDelay = Number(botDelayMs) || DEFAULT_BOT_DELAY;
@@ -180,7 +258,11 @@ io.on('connection', (socket) => {
   // Matchmaking: pair with another searching player into a fresh 2-player
   // game, or wait in the queue until one arrives.
   socket.on('findMatch', ({ name, lang, botDelayMs, clientId } = {}) => {
+    if (!roomActionLimiter(socket.id)) return socket.emit('errorMsg', 'rate_limited');
     if (rm.findRoomBySocket(socket.id)) return socket.emit('errorMsg', 'already_in_room');
+    if (totalRoomCount() >= MAX_ROOMS) return socket.emit('errorMsg', 'server_full');
+    name = validateName(name);
+    clientId = validateClientId(clientId);
     rm.forgetClient(clientId);
     dequeue(cardQueue, socket.id); // no duplicate entries for this socket
 
@@ -373,6 +455,7 @@ const urEngine = require('./game/ur/engine');
 const urBot = require('./game/ur/bot');
 
 const urIo = io.of('/ur');
+urIo.use(connectionGuard);
 
 function urMakeCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -520,6 +603,11 @@ urIo.on('connection', (socket) => {
   }
 
   socket.on('createRoom', ({ name, botDelayMs, mode, clientId } = {}) => {
+    if (!roomActionLimiter(socket.id)) return socket.emit('errorMsg', 'rate_limited');
+    if (urFindRoomBySocket(socket.id)) return socket.emit('errorMsg', 'already_in_room');
+    if (totalRoomCount() >= MAX_ROOMS) return socket.emit('errorMsg', 'server_full');
+    name = validateName(name);
+    clientId = validateClientId(clientId);
     urForgetClient(clientId);
     const code = urMakeCode();
     const room = {
@@ -538,8 +626,11 @@ urIo.on('connection', (socket) => {
   });
 
   socket.on('joinRoom', ({ code, name, clientId } = {}) => {
+    if (!roomActionLimiter(socket.id)) return socket.emit('errorMsg', 'rate_limited');
+    name = validateName(name);
+    clientId = validateClientId(clientId);
     urForgetClient(clientId);
-    const clean = String(code || '').trim().toUpperCase();
+    const clean = String(code || '').trim().toUpperCase().slice(0, 8);
     const room = urRooms.get(clean);
     if (!room) {
       const cardRoom = rm.getRoom(clean);
@@ -557,6 +648,11 @@ urIo.on('connection', (socket) => {
   });
 
   socket.on('singleplayer', ({ name, botDelayMs, mode, clientId } = {}) => {
+    if (!roomActionLimiter(socket.id)) return socket.emit('errorMsg', 'rate_limited');
+    if (urFindRoomBySocket(socket.id)) return socket.emit('errorMsg', 'already_in_room');
+    if (totalRoomCount() >= MAX_ROOMS) return socket.emit('errorMsg', 'server_full');
+    name = validateName(name);
+    clientId = validateClientId(clientId);
     urForgetClient(clientId);
     const code = urMakeCode();
     const cleanMode = urCleanMode(mode);
@@ -586,8 +682,11 @@ urIo.on('connection', (socket) => {
   // Matchmaking: pair with another searching player into a fresh 2-player
   // game (using the waiting player's chosen mode), or wait in the queue.
   socket.on('findMatch', ({ name, botDelayMs, mode, clientId } = {}) => {
-    const inRoom = [...urRooms.values()].some((r) => r.seats.some((s) => s.socketId === socket.id));
-    if (inRoom) return socket.emit('errorMsg', 'Already in a room');
+    if (!roomActionLimiter(socket.id)) return socket.emit('errorMsg', 'rate_limited');
+    if (urFindRoomBySocket(socket.id)) return socket.emit('errorMsg', 'already_in_room');
+    if (totalRoomCount() >= MAX_ROOMS) return socket.emit('errorMsg', 'server_full');
+    name = validateName(name);
+    clientId = validateClientId(clientId);
     urForgetClient(clientId);
     dequeue(urQueue, socket.id);
 
