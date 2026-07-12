@@ -1,0 +1,16 @@
+name: Keep Render alive
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping deployed app
+        run: curl -fsS --max-time 20 https://burge-huhu.onrender.com/healthz -o /dev/null
