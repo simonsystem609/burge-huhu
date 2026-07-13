@@ -51,16 +51,14 @@ function playOneGame() {
       continue;
     }
     passes = 0;
-    try {
-      applyMove(state, actor.player, move);
-    } catch (e) {
-      state.turn = 1 - state.turn;
-      state.phase = 'roll';
-      state.lastRoll = null;
-    }
+    // Let engine errors propagate: a thrown applyMove is a real bug, not a
+    // recoverable game state, so it must surface as a failed game below —
+    // not get silently absorbed into a turn pass.
+    applyMove(state, actor.player, move);
   }
 
-  return state.winner != null;
+  if (state.winner == null) throw new Error('game ended without a winner (stalemate/pass-limit)');
+  return true;
 }
 
 let ok = 0;
@@ -72,4 +70,9 @@ for (let i = 0; i < 100; i++) {
   }
 }
 
-console.log(`✓ ${ok}/100 UR games completed with no integrity errors.`);
+console.log(`${ok}/100 UR games completed with no integrity errors.`);
+if (ok < 100) {
+  console.error(`FAIL: only ${ok}/100 UR games completed cleanly.`);
+  process.exit(1);
+}
+console.log('PASS');

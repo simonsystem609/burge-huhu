@@ -10,16 +10,15 @@
  * Initial state + the move list make the whole game exactly replayable, so
  * human decisions can be studied / trained against later.
  *
- * Enabled on localhost by default; DISABLED on Render (which sets RENDER=1)
- * so the deployed server never writes logs. Override with GAME_LOG=1 / 0.
+ * Explicit opt-in only: disabled unless GAME_LOG=1 is set, on any host. This
+ * writes player names and full hands to disk, so it must never turn on by
+ * itself just because a machine happens not to be Render.
  */
 
 const fs = require('fs');
 const path = require('path');
 
-const ENABLED =
-  process.env.GAME_LOG === '1' ||
-  (!process.env.RENDER && process.env.GAME_LOG !== '0');
+const ENABLED = process.env.GAME_LOG === '1';
 
 const DIR = path.join(__dirname, '..', 'logs');
 

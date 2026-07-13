@@ -33,7 +33,7 @@ function validateClientId(clientId) {
 function socketRateLimiter(max, windowMs) {
   const hits = new Map(); // key -> timestamps[]
 
-  return function check(key) {
+  function check(key) {
     const now = Date.now();
     let arr = hits.get(key);
     if (!arr) {
@@ -44,7 +44,23 @@ function socketRateLimiter(max, windowMs) {
     if (arr.length >= max) return false;
     arr.push(now);
     return true;
-  };
+  }
+
+  // Pruning inside check() only shrinks an entry's own array; a key that's
+  // never looked up again (a one-off visitor's socket id or IP) would
+  // otherwise sit in `hits` forever. Sweep out fully-expired keys so a
+  // long-running server's memory use stays bounded by active traffic, not
+  // by every distinct key it has ever seen.
+  const sweep = setInterval(() => {
+    const now = Date.now();
+    for (const [key, arr] of hits) {
+      if (!arr.length || now - arr[arr.length - 1] > windowMs) hits.delete(key);
+    }
+  }, Math.max(windowMs, 60 * 1000));
+  sweep.unref();
+
+  check._hits = hits; // exposed for tests only
+  return check;
 }
 
 module.exports = { validateName, validateClientId, socketRateLimiter };

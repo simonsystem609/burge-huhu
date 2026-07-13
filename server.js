@@ -14,21 +14,52 @@ const gamelog = require('./game/gamelog');
 const { socketRateLimiter, validateName, validateClientId } = require('./game/security');
 
 const PORT = process.env.PORT || 3000;
-const DEFAULT_BOT_DELAY = Number(process.env.BOT_DELAY_MS || 800);
-const MAX_ROOMS = Number(process.env.MAX_ROOMS || 500);
 
-// Same-origin by default (safe: never breaks a same-origin deploy). Set
-// ALLOWED_ORIGIN on the host (e.g. https://your-app.onrender.com, comma-
-// separated for more than one) to restrict cross-origin socket connections;
-// unset it and this stays exactly as permissive as before.
-const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN
-  ? process.env.ALLOWED_ORIGIN.split(',').map((s) => s.trim())
-  : '*';
+function clampedNumber(envVal, fallback, min, max) {
+  const n = Number(envVal);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+const DEFAULT_BOT_DELAY = clampedNumber(process.env.BOT_DELAY_MS, 800, 100, 10000);
+const MAX_ROOMS = clampedNumber(process.env.MAX_ROOMS, 500, 1, 5000);
+
+// Set ALLOWED_ORIGIN on the host (e.g. https://your-app.onrender.com, comma-
+// separated for more than one) to restrict cross-origin socket connections.
+// Locally (not on Render, nothing configured) this stays permissive so
+// `npm run dev` needs no setup. In production an explicit ALLOWED_ORIGIN
+// always wins; if it's missing we still fail closed to the one known
+// deployment origin instead of '*', so a forgotten env var can never reopen
+// this to every site on the internet.
+const KNOWN_PRODUCTION_ORIGIN = 'https://burge-huhu.onrender.com';
+const IS_PRODUCTION = !!process.env.RENDER;
+const configuredOrigins = process.env.ALLOWED_ORIGIN
+  ? process.env.ALLOWED_ORIGIN.split(',').map((s) => s.trim()).filter(Boolean)
+  : null;
+if (IS_PRODUCTION && !configuredOrigins) {
+  console.error(
+    `ALLOWED_ORIGIN is not set; defaulting to ${KNOWN_PRODUCTION_ORIGIN}. ` +
+    'Set ALLOWED_ORIGIN explicitly (Render dashboard → Environment) to confirm this.'
+  );
+}
+const ALLOWED_ORIGIN = configuredOrigins || (IS_PRODUCTION ? [KNOWN_PRODUCTION_ORIGIN] : '*');
+
+// Origin-header allowlist check shared by both the CORS response (covers the
+// HTTP polling transport/preflight) and allowRequest below (covers the raw
+// WebSocket upgrade, which CORS headers don't gate at all).
+function originAllowed(origin) {
+  if (!origin) return true; // non-browser clients send no Origin; blocking them adds no real defense
+  if (ALLOWED_ORIGIN === '*') return true;
+  return ALLOWED_ORIGIN.includes(origin);
+}
 
 const app = express();
 app.disable('x-powered-by');
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: ALLOWED_ORIGIN } });
+const io = new Server(server, {
+  cors: { origin: ALLOWED_ORIGIN },
+  allowRequest: (req, callback) => callback(null, originAllowed(req.headers.origin)),
+});
 
 // The card game and the Royal Game of Ur keep fully separate room maps, but
 // share one code space: a code can never mean two different rooms, so a join
@@ -62,6 +93,21 @@ function urFindRoomBySocket(socketId) {
 // only reflect the real client IP if we trust X-Forwarded-For.
 app.set('trust proxy', 1);
 
+// Engine.IO's handshake.address is the raw TCP peer, i.e. the proxy in
+// front of us, not the browser — `trust proxy` above only affects Express's
+// own req.ip, not Socket.IO. With exactly one trusted proxy hop (Render's
+// edge), the real client IP is the LAST entry of X-Forwarded-For: that's the
+// address the proxy itself observed connecting to it, so a client can't spoof
+// it by prepending fake entries of its own.
+function clientIp(handshake) {
+  const fwd = handshake.headers['x-forwarded-for'];
+  if (typeof fwd === 'string' && fwd.trim()) {
+    const parts = fwd.split(',').map((s) => s.trim()).filter(Boolean);
+    if (parts.length) return parts[parts.length - 1];
+  }
+  return handshake.address;
+}
+
 // Per-IP cap on new socket connections, and a per-socket cap on the
 // spam-prone room/matchmaking events (creating, joining, searching) —
 // independent of the room count itself, since without this a single socket
@@ -71,7 +117,7 @@ const connectionLimiter = socketRateLimiter(30, 60 * 1000); // 30 new sockets / 
 const roomActionLimiter = socketRateLimiter(10, 30 * 1000); // 10 room actions / socket / 30s
 
 function connectionGuard(socket, next) {
-  if (!connectionLimiter(socket.handshake.address)) {
+  if (!connectionLimiter(clientIp(socket.handshake))) {
     return next(new Error('rate_limited'));
   }
   next();
@@ -358,18 +404,22 @@ io.on('connection', (socket) => {
     if (seatIdx === -1) return;
     const g = room.game;
     const type = payload && payload.type;
+    const CARD_MAX = 16; // longest real card code (e.g. "piros-Kiraly") is 12
     if (type === 'attack') {
       if (g.phase !== 'attack' || g.attacker !== seatIdx) return;
       const cards = Array.isArray(payload.cards)
-        ? payload.cards.filter((c) => typeof c === 'string').slice(0, 5)
+        ? payload.cards
+          .filter((c) => typeof c === 'string' && c.length <= CARD_MAX)
+          .slice(0, 5)
         : [];
       emitPreview(room, seatIdx, { type: 'attack', cards });
     } else if (type === 'defense') {
       if (g.phase !== 'defense' || g.defender !== seatIdx) return;
       const slots = Array.isArray(payload.slots)
         ? payload.slots
-          .filter((s) => s && Number.isInteger(s.slot) && typeof s.card === 'string')
+          .filter((s) => s && Number.isInteger(s.slot) && typeof s.card === 'string' && s.card.length <= CARD_MAX)
           .slice(0, 5)
+          .map((s) => ({ slot: s.slot, card: s.card })) // rebuild exactly — never forward unknown extra properties
         : [];
       emitPreview(room, seatIdx, { type: 'defense', slots });
     }

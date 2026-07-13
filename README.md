@@ -25,7 +25,7 @@ Get rid of your cards. The last player still holding cards is the **bürge** (lo
 > `game/engine.js` to match your house rules.
 
 ## Run locally
-Requires Node.js 18+.
+Requires Node.js 24+ (LTS).
 
 ```bash
 npm install
@@ -97,13 +97,16 @@ Socket.io needs a long-lived connection.
 ## Env vars
 - `PORT` — server port (default 3000; set by the host).
 - `BOT_DELAY_MS` — delay between bot moves in ms (default 850).
-- `ALLOWED_ORIGIN` — restricts Socket.IO's CORS to this origin (comma-separate for more
-  than one), e.g. `https://your-app.onrender.com`. Unset by default, which stays fully
-  permissive (`*`) — set this once you know your deployed URL to lock it down.
-- `MAX_ROOMS` — hard cap on total rooms across both games (default 500), to bound memory
-  growth from room spam.
-- `GAME_LOG` — `1`/`0` to force the local training-log writer on/off, overriding the
-  default (on outside Render, off on Render — see `game/gamelog.js`).
+- `ALLOWED_ORIGIN` — restricts Socket.IO's CORS and WebSocket handshake to this origin
+  (comma-separate for more than one), e.g. `https://your-app.onrender.com`. Permissive
+  (`*`) locally; on Render (`RENDER` is set) it falls back to the known deployed origin
+  if unset, so production never silently opens up to every origin — set it explicitly
+  once you know your deployed URL.
+- `MAX_ROOMS` — hard cap on total rooms across both games (default 500, clamped to
+  1–5000), to bound memory growth from room spam.
+- `BOT_DELAY_MS` — clamped to 100–10000 regardless of what's set.
+- `GAME_LOG` — set to `1` to explicitly opt in to the local training-log writer (off by
+  default everywhere, including localhost — see `game/gamelog.js`).
 
 ## Reconnection
 If your connection drops mid-game, the client automatically tries to rejoin. A bot
@@ -114,11 +117,13 @@ Your room code is stored in `localStorage` so a page refresh won't lose your spo
 
 ```bash
 npm run lint     # ESLint
-npm test         # smoke test (900 simulated games)
+npm test         # card smoke test (900 simulated games)
+npm run test:ur  # Royal Game of Ur smoke test (100 simulated games)
 npm run dev      # auto-restart on file changes
 ```
 
-CI runs `npm test` and `npm run lint` on every push via GitHub Actions.
+CI runs the card and Ur smoke tests, `npm audit`, and `npm run lint` on every push via
+GitHub Actions.
 
 ## License
 Code is [MIT](LICENSE). Image assets are licensed separately — see
