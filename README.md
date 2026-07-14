@@ -96,7 +96,8 @@ Socket.io needs a long-lived connection.
 
 ## Env vars
 - `PORT` — server port (default 3000; set by the host).
-- `BOT_DELAY_MS` — delay between bot moves in ms (default 850).
+- `BOT_DELAY_MS` — delay between bot moves in ms (default 800, clamped to
+  100–10000).
 - `ALLOWED_ORIGIN` — restricts Socket.IO's CORS and WebSocket handshake to this origin
   (comma-separate for more than one), e.g. `https://your-app.onrender.com`. Permissive
   (`*`) locally; on Render (`RENDER` is set) it falls back to the known deployed origin
@@ -104,7 +105,6 @@ Socket.io needs a long-lived connection.
   once you know your deployed URL.
 - `MAX_ROOMS` — hard cap on total rooms across both games (default 500, clamped to
   1–5000), to bound memory growth from room spam.
-- `BOT_DELAY_MS` — clamped to 100–10000 regardless of what's set.
 - `GAME_LOG` — set to `1` to explicitly opt in to the local training-log writer (off by
   default everywhere, including localhost — see `game/gamelog.js`).
 
@@ -119,11 +119,14 @@ Your room code is stored in `localStorage` so a page refresh won't lose your spo
 npm run lint     # ESLint
 npm test         # card smoke test (900 simulated games)
 npm run test:ur  # Royal Game of Ur smoke test (100 simulated games)
+npm run test:security # malformed payload, rate-limit, and Ur mode checks
 npm run dev      # auto-restart on file changes
 ```
 
-CI runs the card and Ur smoke tests, `npm audit`, and `npm run lint` on every push via
-GitHub Actions.
+CI runs the card, Ur, and socket-security tests plus `npm run lint` on every push via
+GitHub Actions. Its full dependency-tree audit includes development dependencies and
+fails on moderate, high, or critical advisories; low advisories remain visible in the
+audit output but do not fail the build.
 
 ## License
 Code is [MIT](LICENSE). Image assets are licensed separately — see

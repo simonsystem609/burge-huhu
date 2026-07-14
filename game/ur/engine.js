@@ -124,7 +124,7 @@ function rollDistribution(cfg) {
 
 function createGame(players, rng, mode) {
   rng = rng || Math.random;
-  const cfg = MODES[mode] || MODES.finkel;
+  const cfg = Object.hasOwn(MODES, mode) ? MODES[mode] : MODES.finkel;
   return {
     players: players.map((p) => ({
       id: p.id,
