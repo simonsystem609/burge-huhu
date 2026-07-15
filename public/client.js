@@ -1561,6 +1561,12 @@
   socket.on('resumed', () => {
     toast(t(lang, 'reconnected'));
   });
+  let sessionReplaced = false;
+  socket.on('sessionReplaced', () => {
+    sessionReplaced = true;
+    showSearch(false);
+    toast(t(lang, 'sessionReplaced'));
+  });
   // Our unfinished room lives in the other game — go there and resume.
   socket.on('resumeElsewhere', ({ game } = {}) => {
     if (game === 'ur') window.location.href = '/ur/';
@@ -1587,6 +1593,7 @@
   });
   socket.on('disconnect', () => {
     showSearch(false);
+    if (sessionReplaced) return;
     toast(t(lang, 'disconnected'));
   });
 

@@ -10,6 +10,7 @@
     "test": "node test/smoke.js",
     "test:ur": "node test/smoke-ur.js",
     "test:security": "node test/security.js",
+    "test:rooms": "node test/rooms.js",
     "lint": "eslint . --ext .js"
   },
   "engines": {

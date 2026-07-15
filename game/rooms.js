@@ -244,14 +244,18 @@ class RoomManager {
   }
 
   /**
-   * Reattach a returning client to their seat. Returns { room, seatIdx }
-   * or null if they have no live seat anywhere.
+   * Reattach a returning client to their seat. The previous socket may still
+   * look connected when a PWA is closed and reopened before Engine.IO's ping
+   * timeout; callers can disconnect `previousSocketId` after the seat has
+   * moved so that stale socket cannot keep acting. Returns
+   * { room, seatIdx, previousSocketId } or null if no seat exists.
    */
   resumeClient(clientId, newSocketId) {
     if (!clientId) return null;
     for (const room of this.rooms.values()) {
-      const seat = room.seats.find((s) => s.clientId === clientId && !s.socketId);
+      const seat = room.seats.find((s) => s.clientId === clientId);
       if (!seat) continue;
+      const previousSocketId = seat.socketId;
       seat.socketId = newSocketId;
       seat.connected = true;
       if (seat._humanName) {
@@ -268,7 +272,7 @@ class RoomManager {
         if (!room.hostClientId) room.hostClientId = clientId;
       }
       room.emptySince = null;
-      return { room, seatIdx: room.seats.indexOf(seat) };
+      return { room, seatIdx: room.seats.indexOf(seat), previousSocketId };
     }
     return null;
   }

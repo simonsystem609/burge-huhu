@@ -111,7 +111,10 @@ Socket.io needs a long-lived connection.
 ## Reconnection
 If your connection drops mid-game, the client automatically tries to rejoin. A bot
 takes over your seat temporarily until you reconnect (within the same session).
-Your room code is stored in `localStorage` so a page refresh won't lose your spot.
+A stable browser id is stored in `localStorage` so a page refresh can reclaim your spot.
+Each browser profile can hold one room/matchmaking membership across both games:
+creating or joining somewhere new releases its older claim, while simply reopening
+the app resumes the existing room and replaces any stale tab connection.
 
 ## Development
 
@@ -120,6 +123,7 @@ npm run lint     # ESLint
 npm test         # card smoke test (900 simulated games)
 npm run test:ur  # Royal Game of Ur smoke test (100 simulated games)
 npm run test:security # malformed payload, rate-limit, and Ur mode checks
+npm run test:rooms    # lobby reopen/session takeover checks
 npm run dev      # auto-restart on file changes
 ```
 

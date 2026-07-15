@@ -91,6 +91,7 @@
       log_stalled: 'Patthelyzet – a legtöbb lappal maradó veszít.',
       reconnected: 'Újracsatlakozva!',
       disconnected: 'Kapcsolat megszakadt. Újracsatlakozás…',
+      sessionReplaced: 'Ez a munkamenet egy másik lapon vagy ablakban folytatódik.',
       // errors
       err_no_room: 'Nincs ilyen szoba.',
       err_full: 'A szoba tele van.',
@@ -174,6 +175,7 @@
       log_stalled: 'Stalemate – whoever holds the most cards loses.',
       reconnected: 'Reconnected!',
       disconnected: 'Connection lost. Reconnecting…',
+      sessionReplaced: 'This session continued in another tab or window.',
       err_no_room: 'No such room.',
       err_full: 'The room is full.',
       err_in_progress: 'The game already started.',

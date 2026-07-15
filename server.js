@@ -273,6 +273,19 @@ function emitPreview(room, fromSeatIdx, payload) {
   }
 }
 
+function leaveCardSocket(socketId) {
+  const info = rm.leaveRoom(socketId);
+  if (info && info.room && !info.ended) {
+    if (info.room.started) {
+      emitGame(info.room);
+      driveBots(info.room.code);
+    } else {
+      emitLobby(info.room);
+    }
+  }
+  return info;
+}
+
 // ── Socket handlers ───────────────────────────────────────────────────────
 
 io.on('connection', (socket) => {
@@ -283,7 +296,7 @@ io.on('connection', (socket) => {
     if (totalRoomCount() >= MAX_ROOMS) return socket.emit('errorMsg', 'server_full');
     name = validateName(name);
     clientId = validateClientId(clientId);
-    rm.forgetClient(clientId); // starting fresh abandons any stale seat
+    releaseClientMemberships(clientId, socket.id);
     const room = rm.createRoom(socket.id, clientId, name, lang || 'hu');
     room.botDelay = clampBotDelay(botDelayMs, DEFAULT_BOT_DELAY);
     socket.emit('joined', { code: room.code });
@@ -292,15 +305,23 @@ io.on('connection', (socket) => {
 
   onObjectEvent(socket, 'joinRoom', ({ code, name, clientId }) => {
     if (!roomActionLimiter(socket.id, clientIp(socket.handshake))) return socket.emit('errorMsg', 'rate_limited');
+    if (rm.findRoomBySocket(socket.id)) return socket.emit('errorMsg', 'already_in_room');
     const clean = String(code || '').trim().toUpperCase().slice(0, 8);
     name = validateName(name);
     clientId = validateClientId(clientId);
-    rm.forgetClient(clientId);
+    const targetRoom = rm.getRoom(clean);
+    if (!targetRoom) {
+      if (urRooms.has(clean)) return socket.emit('wrongGame', { game: 'ur', code: clean });
+      return socket.emit('errorMsg', 'no_room');
+    }
+    if (targetRoom.single) return socket.emit('errorMsg', 'no_room');
+    if (targetRoom.started) return socket.emit('errorMsg', 'in_progress');
+    if (targetRoom.seats.filter((s) => s.socketId || s.isBot).length >= MAX_SEATS) {
+      return socket.emit('errorMsg', 'full');
+    }
+    releaseClientMemberships(clientId, socket.id);
     const res = rm.joinRoom(clean, socket.id, clientId, name);
     if (res.error) {
-      if (res.error === 'no_room' && urRooms.has(clean)) {
-        return socket.emit('wrongGame', { game: 'ur', code: clean });
-      }
       return socket.emit('errorMsg', res.error);
     }
     socket.emit('joined', { code: res.room.code });
@@ -314,7 +335,7 @@ io.on('connection', (socket) => {
     if (totalRoomCount() >= MAX_ROOMS) return socket.emit('errorMsg', 'server_full');
     name = validateName(name);
     clientId = validateClientId(clientId);
-    rm.forgetClient(clientId);
+    releaseClientMemberships(clientId, socket.id);
     const room = rm.createRoom(socket.id, clientId, name, lang || 'hu', { single: true });
     room.botDelay = clampBotDelay(botDelayMs, DEFAULT_BOT_DELAY);
     const botCount = Math.min(Math.max(Number(bots) || 1, 1), MAX_SEATS - 1);
@@ -334,7 +355,7 @@ io.on('connection', (socket) => {
     if (totalRoomCount() >= MAX_ROOMS) return socket.emit('errorMsg', 'server_full');
     name = validateName(name);
     clientId = validateClientId(clientId);
-    rm.forgetClient(clientId);
+    releaseClientMemberships(clientId, socket.id);
     dequeue(cardQueue, socket.id); // no duplicate entries for this socket
 
     let opp = null;
@@ -465,12 +486,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('leaveRoom', () => {
-    const info = rm.leaveRoom(socket.id);
-    if (info && info.room && !info.ended) {
-      if (info.room.started) emitGame(info.room);
-      else emitLobby(info.room);
-      if (info.room.started) driveBots(info.room.code);
-    }
+    leaveCardSocket(socket.id);
     socket.emit('leftRoom');
   });
 
@@ -491,17 +507,8 @@ io.on('connection', (socket) => {
   // holds in BOTH games so resume won't drag it back.
   onObjectEvent(socket, 'abandon', ({ clientId }) => {
     dequeue(cardQueue, socket.id);
-    const info = rm.leaveRoom(socket.id);
-    if (info && info.room && !info.ended) {
-      if (info.room.started) {
-        emitGame(info.room);
-        driveBots(info.room.code);
-      } else {
-        emitLobby(info.room);
-      }
-    }
-    rm.forgetClient(clientId);
-    urForgetClient(clientId);
+    leaveCardSocket(socket.id);
+    releaseClientMemberships(validateClientId(clientId), socket.id);
   });
 
   // A returning browser: reattach it to whatever seat its clientId holds —
@@ -516,6 +523,11 @@ io.on('connection', (socket) => {
       return; // nothing to resume — stay quiet
     }
     const room = res.room;
+    if (res.previousSocketId && res.previousSocketId !== socket.id) {
+      dequeue(cardQueue, res.previousSocketId);
+      disconnectCardSession(res.previousSocketId);
+    }
+    releaseClientMemberships(validateClientId(clientId), socket.id);
     socket.emit('resumed', { code: room.code });
     if (room.started) {
       emitGame(room);
@@ -639,11 +651,12 @@ function urDriveBots(code) {
   }, room.botDelay || 1100);
 }
 
-// Seats (possibly disconnected) held by a returning client, across UR rooms.
+// Seats held by a returning client, including a socket that has not timed out
+// yet after the PWA was closed.
 function urFindSeatByClient(clientId) {
   if (!clientId) return null;
   for (const [code, room] of urRooms) {
-    const seat = room.seats.find((s) => s.clientId === clientId && !s.socketId);
+    const seat = room.seats.find((s) => s.clientId === clientId);
     if (seat) return { code, room, seat };
   }
   return null;
@@ -670,6 +683,111 @@ function urForgetClient(clientId) {
   }
 }
 
+// Explicit leave: the seat is given up for good — bot takes over mid-game
+// (no resume claim), lobby seat is removed, empty rooms die immediately.
+function urLeave(socketId) {
+  const entry = [...urRooms.entries()].find(([, r]) =>
+    r.seats.some((s) => s.socketId === socketId));
+  if (!entry) return;
+  const [code, room] = entry;
+  const seat = room.seats.find((s) => s.socketId === socketId);
+  if (seat) {
+    seat.socketId = null;
+    seat.clientId = null;
+    if (room.game) {
+      seat.isBot = true;
+      if (room.game.players[seat.playerIdx]) room.game.players[seat.playerIdx].isBot = true;
+    }
+  }
+  if (!room.seats.some((s) => s.socketId)) {
+    urRooms.delete(code);
+    return;
+  }
+  if (room.hostId === socketId) {
+    const next = room.seats.find((s) => s.socketId);
+    room.hostId = next.socketId;
+    room.hostClientId = next.clientId || null;
+  }
+  if (room.game) {
+    urEmitGame(room);
+    urDriveBots(code);
+  } else {
+    room.seats = room.seats.filter((s) => s.socketId);
+    room.seats.forEach((s, i) => { s.playerIdx = i; });
+    urEmitLobby(room);
+  }
+}
+
+function removeClientFromQueue(queue, clientId, keepSocketId, socketsToClose) {
+  for (let i = queue.length - 1; i >= 0; i--) {
+    const entry = queue[i];
+    if (entry.clientId !== clientId) continue;
+    queue.splice(i, 1);
+    if (entry.socketId && entry.socketId !== keepSocketId) socketsToClose.add(entry.socketId);
+  }
+}
+
+function disconnectCardSession(socketId) {
+  const oldSocket = socketOf(socketId);
+  if (!oldSocket) return;
+  oldSocket.emit('sessionReplaced');
+  oldSocket.disconnect(true);
+}
+
+function disconnectUrSession(socketId) {
+  const oldSocket = urIo.sockets.get(socketId);
+  if (!oldSocket) return;
+  oldSocket.emit('sessionReplaced');
+  oldSocket.disconnect(true);
+}
+
+/**
+ * Enforce one live membership per browser client id across both games.
+ * `keepSocketId` is the seat just resumed by this request; every other room,
+ * game, or matchmaking claim is released before the caller continues.
+ */
+function releaseClientMemberships(clientId, keepSocketId = null) {
+  if (!clientId) return;
+
+  const cardSockets = new Set();
+  const urSockets = new Set();
+
+  for (const room of [...rm.rooms.values()]) {
+    for (const seat of room.seats) {
+      if (seat.clientId === clientId && seat.socketId && seat.socketId !== keepSocketId) {
+        cardSockets.add(seat.socketId);
+      }
+    }
+  }
+  for (const room of [...urRooms.values()]) {
+    for (const seat of room.seats) {
+      if (seat.clientId === clientId && seat.socketId && seat.socketId !== keepSocketId) {
+        urSockets.add(seat.socketId);
+      }
+    }
+  }
+
+  removeClientFromQueue(cardQueue, clientId, keepSocketId, cardSockets);
+  removeClientFromQueue(urQueue, clientId, keepSocketId, urSockets);
+
+  for (const socketId of cardSockets) {
+    dequeue(cardQueue, socketId);
+    leaveCardSocket(socketId);
+  }
+  for (const socketId of urSockets) {
+    dequeue(urQueue, socketId);
+    urLeave(socketId);
+  }
+
+  // Clean up disconnected legacy duplicates while preserving the one active
+  // seat identified by keepSocketId, if this is a resume rather than a switch.
+  rm.forgetClient(clientId);
+  urForgetClient(clientId);
+
+  for (const socketId of cardSockets) disconnectCardSession(socketId);
+  for (const socketId of urSockets) disconnectUrSession(socketId);
+}
+
 urIo.on('connection', (socket) => {
   function urSeatIdx(room) {
     return room.seats.findIndex((s) => s.socketId === socket.id);
@@ -685,7 +803,7 @@ urIo.on('connection', (socket) => {
     if (totalRoomCount() >= MAX_ROOMS) return socket.emit('errorMsg', 'server_full');
     name = validateName(name);
     clientId = validateClientId(clientId);
-    urForgetClient(clientId);
+    releaseClientMemberships(clientId, socket.id);
     const code = urMakeCode();
     const room = {
       code,
@@ -704,9 +822,9 @@ urIo.on('connection', (socket) => {
 
   onObjectEvent(socket, 'joinRoom', ({ code, name, clientId }) => {
     if (!roomActionLimiter(socket.id, clientIp(socket.handshake))) return socket.emit('errorMsg', 'rate_limited');
+    if (urFindRoomBySocket(socket.id)) return socket.emit('errorMsg', 'already_in_room');
     name = validateName(name);
     clientId = validateClientId(clientId);
-    urForgetClient(clientId);
     const clean = String(code || '').trim().toUpperCase().slice(0, 8);
     const room = urRooms.get(clean);
     if (!room) {
@@ -718,6 +836,7 @@ urIo.on('connection', (socket) => {
     }
     if (room.seats.length >= 2) return socket.emit('errorMsg', 'Room full');
     if (room.game) return socket.emit('errorMsg', 'Game in progress');
+    releaseClientMemberships(clientId, socket.id);
     room.seats.push({ name: name || 'Player', isBot: false, socketId: socket.id, clientId: clientId || null, playerIdx: 1 });
     room.emptySince = null;
     socket.emit('joined', { code: clean });
@@ -730,7 +849,7 @@ urIo.on('connection', (socket) => {
     if (totalRoomCount() >= MAX_ROOMS) return socket.emit('errorMsg', 'server_full');
     name = validateName(name);
     clientId = validateClientId(clientId);
-    urForgetClient(clientId);
+    releaseClientMemberships(clientId, socket.id);
     const code = urMakeCode();
     const cleanMode = urCleanMode(mode);
     const room = {
@@ -764,7 +883,7 @@ urIo.on('connection', (socket) => {
     if (totalRoomCount() >= MAX_ROOMS) return socket.emit('errorMsg', 'server_full');
     name = validateName(name);
     clientId = validateClientId(clientId);
-    urForgetClient(clientId);
+    releaseClientMemberships(clientId, socket.id);
     dequeue(urQueue, socket.id);
 
     let opp = null;
@@ -870,41 +989,6 @@ urIo.on('connection', (socket) => {
     urDriveBots(room.code);
   });
 
-  // Explicit leave: the seat is given up for good — bot takes over mid-game
-  // (no resume claim), lobby seat is removed, empty rooms die immediately.
-  function urLeave(socketId) {
-    const entry = [...urRooms.entries()].find(([, r]) =>
-      r.seats.some((s) => s.socketId === socketId));
-    if (!entry) return;
-    const [code, room] = entry;
-    const seat = room.seats.find((s) => s.socketId === socketId);
-    if (seat) {
-      seat.socketId = null;
-      seat.clientId = null;
-      if (room.game) {
-        seat.isBot = true;
-        if (room.game.players[seat.playerIdx]) room.game.players[seat.playerIdx].isBot = true;
-      }
-    }
-    if (!room.seats.some((s) => s.socketId)) {
-      urRooms.delete(code);
-      return;
-    }
-    if (room.hostId === socketId) {
-      const next = room.seats.find((s) => s.socketId);
-      room.hostId = next.socketId;
-      room.hostClientId = next.clientId || null;
-    }
-    if (room.game) {
-      urEmitGame(room);
-      urDriveBots(code);
-    } else {
-      room.seats = room.seats.filter((s) => s.socketId);
-      room.seats.forEach((s, i) => { s.playerIdx = i; });
-      urEmitLobby(room);
-    }
-  }
-
   // Connection dropped: keep the player's place. With another human still
   // connected a bot fills in (game) or the seat is freed (lobby); with
   // nobody left the room simply pauses and waits out the grace period.
@@ -949,21 +1033,26 @@ urIo.on('connection', (socket) => {
   onObjectEvent(socket, 'abandon', ({ clientId }) => {
     dequeue(urQueue, socket.id);
     urLeave(socket.id);
-    urForgetClient(clientId);
-    rm.forgetClient(clientId);
+    releaseClientMemberships(validateClientId(clientId), socket.id);
   });
 
   onObjectEvent(socket, 'resume', ({ clientId }) => {
     const found = urFindSeatByClient(clientId);
     if (!found) {
       const cardRoom = rm.findRoomByClient(clientId);
-      if (cardRoom && cardRoom.seats.some((s) => s.clientId === clientId && !s.socketId)) {
+      if (cardRoom && cardRoom.seats.some((s) => s.clientId === clientId)) {
         socket.emit('resumeElsewhere', { game: 'cards' });
       }
       return;
     }
     const { code, room, seat } = found;
+    const previousSocketId = seat.socketId;
     seat.socketId = socket.id;
+    if (previousSocketId && previousSocketId !== socket.id) {
+      dequeue(urQueue, previousSocketId);
+      disconnectUrSession(previousSocketId);
+    }
+    releaseClientMemberships(validateClientId(clientId), socket.id);
     if (seat.isBot) {
       seat.isBot = false;
       if (room.game && room.game.players[seat.playerIdx]) {

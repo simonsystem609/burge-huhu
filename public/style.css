@@ -29,6 +29,7 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
 /* Topbar */
@@ -47,10 +48,19 @@ body {
 .lang.active { background: var(--accent); color: #06120b; }
 
 /* Layout */
-#app { flex: 1; display: flex; contain: layout style; }
-.screen { display: none; flex: 1; }
+#app { flex: 1; display: flex; contain: layout style; min-width: 0; min-height: 0; overflow: hidden; }
+.screen { display: none; flex: 1; min-width: 0; min-height: 0; }
 .screen.active { display: flex; flex: 1; }
-#screen-menu.active, #screen-lobby.active { justify-content: center; align-items: flex-start; padding: 40px 16px; }
+#screen-menu.active, #screen-lobby.active {
+  justify-content: flex-start;
+  align-items: center;
+  flex-direction: column;
+  padding: 40px 16px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+}
 #screen-game.active { align-items: stretch; flex: 1; contain: layout style; height: 100%; }
 
 /* Buttons */
@@ -75,6 +85,7 @@ button.small { padding: 6px 10px; font-size: 0.85em; }
 
 /* Menu / lobby cards */
 .menu-card {
+  flex: 0 0 auto;
   width: min(480px, 100%);
   max-width: 100%;
   min-width: 0;
@@ -362,4 +373,8 @@ input:focus, select:focus { outline: 2px solid var(--accent); }
   .opp .fan { max-width: 118px; height: 60px; }
   .pile-spot { width: 100px; height: 72px; }
   .hand-zone { height: 112px; }
+}
+
+@media (max-height: 700px) {
+  #screen-menu.active, #screen-lobby.active { padding-top: 16px; padding-bottom: 16px; }
 }
