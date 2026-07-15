@@ -16,9 +16,15 @@
 
   let lang = localStorage.getItem('burge_lang') || 'hu';
   let lastLobby = null;
+  let peopleLooking = 0;
 
   const $ = (id) => document.getElementById(id);
   const qsa = (sel) => Array.from(document.querySelectorAll(sel));
+
+  function renderMatchCount(count = peopleLooking) {
+    peopleLooking = Number.isInteger(count) && count >= 0 ? count : 0;
+    $('match-count').textContent = t(lang, 'peopleLooking').replace('{count}', peopleLooking);
+  }
 
   // One shared duration for every card movement, adjustable from the menu.
   // Applied as a CSS custom property so JS timing and CSS transitions match.
@@ -53,6 +59,7 @@
     qsa('.lang').forEach((b) =>
       b.classList.toggle('active', b.getAttribute('data-lang') === lang)
     );
+    renderMatchCount();
   }
 
   function setLang(next) {
@@ -1545,6 +1552,7 @@
   socket.on('matchSearching', () => showSearch(true));
   socket.on('matched', () => showSearch(false));
   socket.on('matchCancelled', () => showSearch(false));
+  socket.on('matchCount', (data = {}) => renderMatchCount(data.count));
   // The code belongs to a Royal Game of Ur room — hop over there with the
   // code prefilled so the join completes automatically.
   socket.on('wrongGame', ({ code } = {}) => {

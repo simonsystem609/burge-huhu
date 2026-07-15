@@ -72,6 +72,8 @@ select { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 input:focus, select:focus { outline: 2px solid #d4a060; }
 #code-input { text-transform: uppercase; letter-spacing: 3px; text-align: center; }
 .menu-actions { display: flex; flex-direction: column; gap: 12px; }
+.matchmake-block { display: flex; flex-direction: column; gap: 6px; }
+.match-count { color: #a08060; font-size: 0.82rem; text-align: center; }
 .divider { height: 1px; background: #5a3a20; margin: 4px 0; }
 .join-row { display: flex; gap: 8px; }
 .join-row input { flex: 1; }

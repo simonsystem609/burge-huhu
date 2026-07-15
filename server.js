@@ -94,7 +94,15 @@ const urQueue = [];   // [{ socketId, clientId, name, botDelayMs, mode }]
 
 function dequeue(queue, socketId) {
   const i = queue.findIndex((e) => e.socketId === socketId);
-  if (i !== -1) queue.splice(i, 1);
+  if (i === -1) return false;
+  queue.splice(i, 1);
+  emitMatchCount(queue);
+  return true;
+}
+
+function enqueueMatch(queue, entry) {
+  queue.push(entry);
+  emitMatchCount(queue);
 }
 
 function totalRoomCount() {
@@ -289,6 +297,8 @@ function leaveCardSocket(socketId) {
 // ── Socket handlers ───────────────────────────────────────────────────────
 
 io.on('connection', (socket) => {
+  socket.emit('matchCount', { count: cardQueue.length });
+
   onObjectEvent(socket, 'createRoom', ({ name, lang, botDelayMs, clientId }) => {
     if (!roomActionLimiter(socket.id, clientIp(socket.handshake))) return socket.emit('errorMsg', 'rate_limited');
     const existing = rm.findRoomBySocket(socket.id);
@@ -366,7 +376,7 @@ io.on('connection', (socket) => {
     }
 
     if (!opp) {
-      cardQueue.push({ socketId: socket.id, clientId: clientId || null, name, lang, botDelayMs });
+      enqueueMatch(cardQueue, { socketId: socket.id, clientId: clientId || null, name, lang, botDelayMs });
       return socket.emit('matchSearching');
     }
 
@@ -374,9 +384,10 @@ io.on('connection', (socket) => {
     room.botDelay = clampBotDelay(opp.botDelayMs, DEFAULT_BOT_DELAY);
     const res = rm.joinRoom(room.code, socket.id, clientId, name);
     if (res.error) {
-      cardQueue.push({ socketId: socket.id, clientId: clientId || null, name, lang, botDelayMs });
+      enqueueMatch(cardQueue, { socketId: socket.id, clientId: clientId || null, name, lang, botDelayMs });
       return socket.emit('matchSearching');
     }
+    emitMatchCount(cardQueue);
     rm.startGame(room);
     gamelog.logStart(room);
     socketOf(opp.socketId)?.emit('matched', { code: room.code });
@@ -545,6 +556,11 @@ const urBot = require('./game/ur/bot');
 
 const urIo = io.of('/ur');
 urIo.use(connectionGuard);
+
+function emitMatchCount(queue) {
+  const namespace = queue === cardQueue ? io : urIo;
+  namespace.emit('matchCount', { count: queue.length });
+}
 
 function urMakeCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -719,12 +735,15 @@ function urLeave(socketId) {
 }
 
 function removeClientFromQueue(queue, clientId, keepSocketId, socketsToClose) {
+  let changed = false;
   for (let i = queue.length - 1; i >= 0; i--) {
     const entry = queue[i];
     if (entry.clientId !== clientId) continue;
     queue.splice(i, 1);
+    changed = true;
     if (entry.socketId && entry.socketId !== keepSocketId) socketsToClose.add(entry.socketId);
   }
+  if (changed) emitMatchCount(queue);
 }
 
 function disconnectCardSession(socketId) {
@@ -789,6 +808,8 @@ function releaseClientMemberships(clientId, keepSocketId = null) {
 }
 
 urIo.on('connection', (socket) => {
+  socket.emit('matchCount', { count: urQueue.length });
+
   function urSeatIdx(room) {
     return room.seats.findIndex((s) => s.socketId === socket.id);
   }
@@ -894,7 +915,13 @@ urIo.on('connection', (socket) => {
     }
 
     if (!opp) {
-      urQueue.push({ socketId: socket.id, clientId: clientId || null, name, botDelayMs, mode: urCleanMode(mode) });
+      enqueueMatch(urQueue, {
+        socketId: socket.id,
+        clientId: clientId || null,
+        name,
+        botDelayMs,
+        mode: urCleanMode(mode),
+      });
       return socket.emit('matchSearching');
     }
 
@@ -919,6 +946,7 @@ urIo.on('connection', (socket) => {
       cleanMode
     );
     urRooms.set(code, room);
+    emitMatchCount(urQueue);
     urIo.sockets.get(opp.socketId)?.emit('matched', { code });
     socket.emit('matched', { code });
     urEmitGame(room);

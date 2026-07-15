@@ -127,6 +127,8 @@ input:focus, select:focus { outline: 2px solid var(--accent); }
 #code-input { text-transform: uppercase; letter-spacing: 3px; text-align: center; }
 
 .menu-actions { display: flex; flex-direction: column; gap: 12px; }
+.matchmake-block { display: flex; flex-direction: column; gap: 6px; }
+.match-count { color: var(--muted); font-size: 0.82rem; text-align: center; }
 .single-block { display: flex; flex-direction: column; gap: 10px; background: rgba(0,0,0,0.2); padding: 12px; border-radius: 12px; }
 .divider { height: 1px; background: rgba(255,255,255,0.1); margin: 4px 0; }
 .join-row { display: flex; gap: 8px; }

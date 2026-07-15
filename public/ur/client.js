@@ -106,6 +106,10 @@
   function showSearch(on) {
     $('search-modal').classList.toggle('show', on);
   }
+  function renderMatchCount(data) {
+    const count = data && Number.isInteger(data.count) && data.count >= 0 ? data.count : 0;
+    $('match-count').textContent = '(People looking: ' + count + ')';
+  }
   $('btn-matchmake').onclick = function () {
     showSearch(true);
     socket.emit('findMatch', { name: myName(), botDelayMs: botDelay(), mode: gameMode(), clientId: clientId() });
@@ -751,6 +755,7 @@
   socket.on('matchSearching', function () { showSearch(true); });
   socket.on('matched', function () { showSearch(false); });
   socket.on('matchCancelled', function () { showSearch(false); });
+  socket.on('matchCount', renderMatchCount);
   // The code belongs to a card-game room — hop over there with the code
   // prefilled so the join completes automatically.
   socket.on('wrongGame', function (d) {

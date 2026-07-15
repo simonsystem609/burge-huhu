@@ -4,6 +4,8 @@ A Hungarian trump card game (a.k.a. *birge / süsü / küldőcske / ötös hül�
 **Node.js + Express + Socket.io**. Play **singleplayer** against bots or **multiplayer**
 online with a room code. Bilingual UI (**Magyar / English**).
 
+**Play online:** [burge-huhu.onrender.com](https://burge-huhu.onrender.com)
+
 ## The game in one line
 Get rid of your cards. The last player still holding cards is the **bürge** (loser). 🙈
 
