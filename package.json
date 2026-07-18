@@ -11,6 +11,7 @@
     "test:ur": "node test/smoke-ur.js",
     "test:security": "node test/security.js",
     "test:rooms": "node test/rooms.js",
+    "test:server": "node test/server-abuse.js",
     "lint": "eslint . --ext .js"
   },
   "engines": {
@@ -23,7 +24,8 @@
     "socket.io": "^4.7.5"
   },
   "devDependencies": {
-    "eslint": "^8.57.0"
+    "eslint": "^8.57.0",
+    "socket.io-client": "4.8.3"
   },
   "keywords": [
     "cardgame",

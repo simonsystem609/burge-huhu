@@ -126,6 +126,7 @@ npm test         # card smoke test (900 simulated games)
 npm run test:ur  # Royal Game of Ur smoke test (100 simulated games)
 npm run test:security # malformed payload, rate-limit, and Ur mode checks
 npm run test:rooms    # lobby reopen/session takeover checks
+npm run test:server   # live socket guards and resume-abuse checks
 npm run dev      # auto-restart on file changes
 ```
 

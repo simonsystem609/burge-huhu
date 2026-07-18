@@ -31,17 +31,26 @@ assert.strictEqual(room.seats[0].socketId, 'socket-third');
 
 assert.strictEqual(rooms.resumeClient('missing-client', 'socket-x'), null);
 
+// Starting an already-active room must not replace its game object or create
+// a second bot-driving chain.
+const secondRoom = rooms.createRoom('socket-b', 'client-b', 'Bob');
+rooms.addBot(secondRoom);
+assert.strictEqual(rooms.startGame(secondRoom).error, undefined);
+const activeGame = secondRoom.game;
+assert.strictEqual(rooms.startGame(secondRoom).error, 'in_progress');
+assert.strictEqual(secondRoom.game, activeGame);
+
 // Keep the server wiring exhaustive: four membership entry points per game,
-// plus abandon and resume in both namespaces, must pass through the single-
-// membership coordinator.
+// plus the now-prevalidated resume in both namespaces, pass the clean id
+// directly. Abandon still validates inline in both namespaces.
 const serverSource = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
 assert.strictEqual(
   (serverSource.match(/releaseClientMemberships\(clientId, socket\.id\)/g) || []).length,
-  8
+  10
 );
 assert.strictEqual(
   (serverSource.match(/releaseClientMemberships\(validateClientId\(clientId\), socket\.id\)/g) || []).length,
-  4
+  2
 );
 
 console.log('PASS: lobby takeover, resume, and single-membership wiring checks');

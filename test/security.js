@@ -10,6 +10,8 @@ const {
   socketAndIpRateLimiter,
 } = require('../game/security');
 const urEngine = require('../game/ur/engine');
+const { fullDeck, isCardId } = require('../game/deck');
+const { createKeyedScheduler } = require('../game/keyed-scheduler');
 
 class FakeSocket {
   constructor() {
@@ -109,5 +111,46 @@ for (const mode of ['__proto__', 'constructor', 'toString']) {
 for (const mode of Object.keys(urEngine.MODES)) {
   assert.strictEqual(urEngine.createGame(players, () => 0.5, mode).mode, mode);
 }
+
+// Preview payloads may only relay canonical card ids; HTML fragments and
+// lookalikes must never reach the client's cardHTML/innerHTML path.
+for (const card of fullDeck()) assert.strictEqual(isCardId(card), true);
+for (const card of [
+  '<img src=x>',
+  'piros-Asz"><img',
+  'constructor',
+  'tok-VI',
+  '',
+  null,
+]) {
+  assert.strictEqual(isCardId(card), false, `Accepted non-canonical card id: ${card}`);
+}
+assert.strictEqual((serverSource.match(/\.filter\(isCardId\)/g) || []).length, 1);
+assert.strictEqual((serverSource.match(/isCardId\(s\.card\)/g) || []).length, 1);
+
+// Only one bot callback may be pending for a room. Once it starts, the next
+// turn can schedule normally; cancellation also releases the key.
+const timers = [];
+const cleared = [];
+const scheduler = createKeyedScheduler(
+  (callback) => {
+    const handle = { callback };
+    timers.push(handle);
+    return handle;
+  },
+  (handle) => { cleared.push(handle); }
+);
+let botRuns = 0;
+assert.strictEqual(scheduler.schedule('ROOM', 10, () => { botRuns++; }), true);
+assert.strictEqual(scheduler.schedule('ROOM', 10, () => { botRuns++; }), false);
+assert.strictEqual(timers.length, 1);
+assert.strictEqual(scheduler.hasPending('ROOM'), true);
+timers.shift().callback();
+assert.strictEqual(botRuns, 1);
+assert.strictEqual(scheduler.hasPending('ROOM'), false);
+assert.strictEqual(scheduler.schedule('ROOM', 10, () => { botRuns++; }), true);
+assert.strictEqual(scheduler.cancel('ROOM'), true);
+assert.strictEqual(scheduler.hasPending('ROOM'), false);
+assert.strictEqual(cleared.length, 1);
 
 console.log('PASS: socket payload, dual-quota, and Ur mode security checks');

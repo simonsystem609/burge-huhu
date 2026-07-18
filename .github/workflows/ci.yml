@@ -23,6 +23,7 @@ jobs:
       - run: npm run test:ur
       - run: npm run test:security
       - run: npm run test:rooms
+      - run: npm run test:server
       - run: npm audit --audit-level=moderate
 
   lint:

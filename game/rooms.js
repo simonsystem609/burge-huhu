@@ -134,6 +134,7 @@ class RoomManager {
   }
 
   startGame(room) {
+    if (room.started || room.game) return { error: 'in_progress' };
     const seatCount = room.seats.length;
     if (seatCount < MIN_SEATS) return { error: 'need_players' };
     if (seatCount > MAX_SEATS) return { error: 'full' };

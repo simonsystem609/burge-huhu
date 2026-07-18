@@ -52,6 +52,13 @@ function fullDeck() {
   return deck;
 }
 
+const CARD_IDS = new Set(fullDeck());
+
+/** True only for one of the canonical 32 card ids. */
+function isCardId(card) {
+  return typeof card === 'string' && CARD_IDS.has(card);
+}
+
 /** Fisher–Yates shuffle (in place), returns the same array. */
 function shuffle(deck, rng = Math.random) {
   for (let i = deck.length - 1; i > 0; i--) {
@@ -89,6 +96,7 @@ module.exports = {
   cardRank,
   strength,
   fullDeck,
+  isCardId,
   shuffle,
   beats,
 };

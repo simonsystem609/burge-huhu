@@ -10,6 +10,8 @@ const { Server } = require('socket.io');
 const { RoomManager, MAX_SEATS } = require('./game/rooms');
 const { applyMove, currentActor, viewFor } = require('./game/engine');
 const { chooseMove } = require('./game/bot');
+const { isCardId } = require('./game/deck');
+const { createKeyedScheduler } = require('./game/keyed-scheduler');
 const gamelog = require('./game/gamelog');
 const {
   onObjectEvent,
@@ -91,6 +93,8 @@ const rm = new RoomManager({ isCodeTaken: (code) => urRooms.has(code) });
 // with the head of the queue into a fresh 2-player game.
 const cardQueue = []; // [{ socketId, clientId, name, lang, botDelayMs }]
 const urQueue = [];   // [{ socketId, clientId, name, botDelayMs, mode }]
+const cardBotScheduler = createKeyedScheduler();
+const urBotScheduler = createKeyedScheduler();
 
 function dequeue(queue, socketId) {
   const i = queue.findIndex((e) => e.socketId === socketId);
@@ -237,9 +241,9 @@ function driveBots(code) {
   const seat = room.seats[actor.player];
   if (!seat || !seat.isBot) return; // it's a human's turn — wait
 
-  setTimeout(() => {
+  cardBotScheduler.schedule(room, room.botDelay || DEFAULT_BOT_DELAY, () => {
     const r = rm.getRoom(code);
-    if (!r || !r.game || r.game.phase === 'over') return;
+    if (r !== room || !r.game || r.game.phase === 'over') return;
     // Pause while nobody is watching — the game resumes with the player.
     if (!r.seats.some((st) => st.socketId)) return;
     const a = currentActor(r.game);
@@ -261,7 +265,7 @@ function driveBots(code) {
     gamelog.logMove(r, a.player, move);
     emitGame(r);
     driveBots(code);
-  }, room.botDelay || DEFAULT_BOT_DELAY);
+  });
 }
 
 function seatIndexOf(room, socketId) {
@@ -463,12 +467,11 @@ io.on('connection', (socket) => {
     if (seatIdx === -1) return;
     const g = room.game;
     const type = payload && payload.type;
-    const CARD_MAX = 16; // longest real card code (e.g. "piros-Kiraly") is 12
     if (type === 'attack') {
       if (g.phase !== 'attack' || g.attacker !== seatIdx) return;
       const cards = Array.isArray(payload.cards)
         ? payload.cards
-          .filter((c) => typeof c === 'string' && c.length <= CARD_MAX)
+          .filter(isCardId)
           .slice(0, 5)
         : [];
       emitPreview(room, seatIdx, { type: 'attack', cards });
@@ -476,7 +479,7 @@ io.on('connection', (socket) => {
       if (g.phase !== 'defense' || g.defender !== seatIdx) return;
       const slots = Array.isArray(payload.slots)
         ? payload.slots
-          .filter((s) => s && Number.isInteger(s.slot) && typeof s.card === 'string' && s.card.length <= CARD_MAX)
+          .filter((s) => s && Number.isInteger(s.slot) && isCardId(s.card))
           .slice(0, 5)
           .map((s) => ({ slot: s.slot, card: s.card })) // rebuild exactly — never forward unknown extra properties
         : [];
@@ -526,6 +529,11 @@ io.on('connection', (socket) => {
   // singleplayer, waiting lobby or a live game — or point it at the other
   // game if that's where its room lives.
   onObjectEvent(socket, 'resume', ({ clientId }) => {
+    clientId = validateClientId(clientId);
+    if (!clientId) return;
+    if (!roomActionLimiter(socket.id, clientIp(socket.handshake))) {
+      return socket.emit('errorMsg', 'rate_limited');
+    }
     const res = rm.resumeClient(clientId, socket.id);
     if (!res) {
       if (urFindSeatByClient(clientId)) {
@@ -534,11 +542,12 @@ io.on('connection', (socket) => {
       return; // nothing to resume — stay quiet
     }
     const room = res.room;
+    if (res.previousSocketId === socket.id) return;
     if (res.previousSocketId && res.previousSocketId !== socket.id) {
       dequeue(cardQueue, res.previousSocketId);
       disconnectCardSession(res.previousSocketId);
     }
-    releaseClientMemberships(validateClientId(clientId), socket.id);
+    releaseClientMemberships(clientId, socket.id);
     socket.emit('resumed', { code: room.code });
     if (room.started) {
       emitGame(room);
@@ -621,9 +630,9 @@ function urDriveBots(code) {
   const seat = room.seats[actor.player];
   if (!seat || !seat.isBot) return;
 
-  setTimeout(() => {
+  urBotScheduler.schedule(room, room.botDelay || 1100, () => {
     const r = urRooms.get(code);
-    if (!r || !r.game || r.game.phase === 'over') return;
+    if (r !== room || !r.game || r.game.phase === 'over') return;
     // Pause while nobody is watching — resumes with the player.
     if (!r.seats.some((st) => st.socketId)) return;
     const a = urEngine.currentActor(r.game);
@@ -664,7 +673,7 @@ function urDriveBots(code) {
       urEmitGame(r);
       urDriveBots(code);
     }
-  }, room.botDelay || 1100);
+  });
 }
 
 // Seats held by a returning client, including a socket that has not timed out
@@ -959,8 +968,12 @@ urIo.on('connection', (socket) => {
   });
 
   socket.on('startGame', () => {
+    if (!roomActionLimiter(socket.id, clientIp(socket.handshake))) {
+      return socket.emit('errorMsg', 'rate_limited');
+    }
     const room = urRooms.get([...urRooms.entries()].find(([, r]) => r.hostId === socket.id)?.[0]);
     if (!room || room.hostId !== socket.id) return;
+    if (room.game) return socket.emit('errorMsg', 'Game already started');
     if (room.seats.length < 2) return socket.emit('errorMsg', 'Need 2 players');
     room.game = urEngine.createGame(room.seats.map((s, i) => ({
       id: 'p' + i, name: s.name, isBot: s.isBot,
@@ -975,6 +988,7 @@ urIo.on('connection', (socket) => {
       r.seats.some((s) => s.socketId === socket.id));
     if (!entry) return;
     const room = entry[1];
+    if (!room.game) return;
     const si = urSeatIdx(room);
     if (si === -1 || room.game.turn !== si || room.game.phase !== 'roll') return;
 
@@ -998,6 +1012,7 @@ urIo.on('connection', (socket) => {
       r.seats.some((s) => s.socketId === socket.id));
     if (!entry) return;
     const room = entry[1];
+    if (!room.game) return;
     const si = urSeatIdx(room);
     if (si === -1 || room.game.turn !== si || room.game.phase !== 'move') return;
 
@@ -1065,6 +1080,11 @@ urIo.on('connection', (socket) => {
   });
 
   onObjectEvent(socket, 'resume', ({ clientId }) => {
+    clientId = validateClientId(clientId);
+    if (!clientId) return;
+    if (!roomActionLimiter(socket.id, clientIp(socket.handshake))) {
+      return socket.emit('errorMsg', 'rate_limited');
+    }
     const found = urFindSeatByClient(clientId);
     if (!found) {
       const cardRoom = rm.findRoomByClient(clientId);
@@ -1075,12 +1095,13 @@ urIo.on('connection', (socket) => {
     }
     const { code, room, seat } = found;
     const previousSocketId = seat.socketId;
+    if (previousSocketId === socket.id) return;
     seat.socketId = socket.id;
     if (previousSocketId && previousSocketId !== socket.id) {
       dequeue(urQueue, previousSocketId);
       disconnectUrSession(previousSocketId);
     }
-    releaseClientMemberships(validateClientId(clientId), socket.id);
+    releaseClientMemberships(clientId, socket.id);
     if (seat.isBot) {
       seat.isBot = false;
       if (room.game && room.game.players[seat.playerIdx]) {
