@@ -21,7 +21,10 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run test:ur
-      - run: npm audit --omit=dev --audit-level=high
+      - run: npm run test:security
+      - run: npm run test:rooms
+      - run: npm run test:server
+      - run: npm audit --audit-level=moderate
 
   lint:
     runs-on: ubuntu-latest

@@ -11,8 +11,10 @@ public domain. Full source, author, and modification details:
 
 ## Royal Game of Ur board — `public/ur/board-source.png`
 
-Original artwork created by the project author (ecsedyadam), 2026.
-Licensed under the MIT License (same terms as the code — see [LICENSE](LICENSE)).
+AI-generated with OpenAI `gpt-image` at the project author's direction, then
+edited by the project author (ecsedyadam) in Microsoft Paint, 2026. The author
+licenses their edits and the project's use of the asset under the MIT License
+(same terms as the code — see [LICENSE](LICENSE)).
 
 ## PWA icons — `public/icons/*.png`
 
@@ -20,11 +22,3 @@ Licensed under the MIT License (same terms as the code — see [LICENSE](LICENSE
 generated (no external image inputs) by [`scripts/make-icons.js`](scripts/make-icons.js) —
 a dark-felt background, a drawn white playing card, and a drawn red heart pip, composited
 by a small from-scratch PNG encoder. Original project asset; licensed MIT, same as the code.
-
-## Not shipped, not deployed
-
-`promptimages/download.png` (an annotated development screenshot) and `deepseek.md` (a
-stale handoff note for an earlier development pass) are tracked in the repo for history
-but are not copied into the Docker image or referenced by any served page. The screenshot
-incidentally shows the Hungarian card deck art credited above; no separate license applies
-beyond that. Neither file is required for the app to run.

@@ -106,6 +106,10 @@
   function showSearch(on) {
     $('search-modal').classList.toggle('show', on);
   }
+  function renderMatchCount(data) {
+    const count = data && Number.isInteger(data.count) && data.count >= 0 ? data.count : 0;
+    $('match-count').textContent = '(People looking: ' + count + ')';
+  }
   $('btn-matchmake').onclick = function () {
     showSearch(true);
     socket.emit('findMatch', { name: myName(), botDelayMs: botDelay(), mode: gameMode(), clientId: clientId() });
@@ -751,6 +755,7 @@
   socket.on('matchSearching', function () { showSearch(true); });
   socket.on('matched', function () { showSearch(false); });
   socket.on('matchCancelled', function () { showSearch(false); });
+  socket.on('matchCount', renderMatchCount);
   // The code belongs to a card-game room — hop over there with the code
   // prefilled so the join completes automatically.
   socket.on('wrongGame', function (d) {
@@ -762,12 +767,22 @@
   socket.on('leftRoom', function () { showScreen('screen-menu'); });
   socket.on('joined', function () {});
   socket.on('resumed', function () { toast('Reconnected — the game picks up where you left it.'); });
+  let sessionReplaced = false;
+  socket.on('sessionReplaced', function () {
+    sessionReplaced = true;
+    showSearch(false);
+    toast('This session continued in another tab or window.');
+  });
   // Our unfinished room lives in the card game — go there and resume.
   socket.on('resumeElsewhere', function (d) {
     if (d && d.game === 'cards') window.location.href = '/';
   });
 
-  socket.on('disconnect', function () { showSearch(false); toast('Connection lost. Reconnecting...'); });
+  socket.on('disconnect', function () {
+    showSearch(false);
+    if (sessionReplaced) return;
+    toast('Connection lost. Reconnecting...');
+  });
 
   // A ?join=CODE in the URL (arriving from the card game's redirect) joins
   // that room as soon as the socket is up; otherwise ask the server whether

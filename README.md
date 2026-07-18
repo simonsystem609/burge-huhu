@@ -4,6 +4,8 @@ A Hungarian trump card game (a.k.a. *birge / süsü / küldőcske / ötös hül�
 **Node.js + Express + Socket.io**. Play **singleplayer** against bots or **multiplayer**
 online with a room code. Bilingual UI (**Magyar / English**).
 
+**Play online:** [burge-huhu.onrender.com](https://burge-huhu.onrender.com)
+
 ## The game in one line
 Get rid of your cards. The last player still holding cards is the **bürge** (loser). 🙈
 
@@ -96,7 +98,8 @@ Socket.io needs a long-lived connection.
 
 ## Env vars
 - `PORT` — server port (default 3000; set by the host).
-- `BOT_DELAY_MS` — delay between bot moves in ms (default 850).
+- `BOT_DELAY_MS` — delay between bot moves in ms (default 800, clamped to
+  100–10000).
 - `ALLOWED_ORIGIN` — restricts Socket.IO's CORS and WebSocket handshake to this origin
   (comma-separate for more than one), e.g. `https://your-app.onrender.com`. Permissive
   (`*`) locally; on Render (`RENDER` is set) it falls back to the known deployed origin
@@ -104,14 +107,16 @@ Socket.io needs a long-lived connection.
   once you know your deployed URL.
 - `MAX_ROOMS` — hard cap on total rooms across both games (default 500, clamped to
   1–5000), to bound memory growth from room spam.
-- `BOT_DELAY_MS` — clamped to 100–10000 regardless of what's set.
 - `GAME_LOG` — set to `1` to explicitly opt in to the local training-log writer (off by
   default everywhere, including localhost — see `game/gamelog.js`).
 
 ## Reconnection
 If your connection drops mid-game, the client automatically tries to rejoin. A bot
 takes over your seat temporarily until you reconnect (within the same session).
-Your room code is stored in `localStorage` so a page refresh won't lose your spot.
+A stable browser id is stored in `localStorage` so a page refresh can reclaim your spot.
+Each browser profile can hold one room/matchmaking membership across both games:
+creating or joining somewhere new releases its older claim, while simply reopening
+the app resumes the existing room and replaces any stale tab connection.
 
 ## Development
 
@@ -119,11 +124,16 @@ Your room code is stored in `localStorage` so a page refresh won't lose your spo
 npm run lint     # ESLint
 npm test         # card smoke test (900 simulated games)
 npm run test:ur  # Royal Game of Ur smoke test (100 simulated games)
+npm run test:security # malformed payload, rate-limit, and Ur mode checks
+npm run test:rooms    # lobby reopen/session takeover checks
+npm run test:server   # live socket guards and resume-abuse checks
 npm run dev      # auto-restart on file changes
 ```
 
-CI runs the card and Ur smoke tests, `npm audit`, and `npm run lint` on every push via
-GitHub Actions.
+CI runs the card, Ur, and socket-security tests plus `npm run lint` on every push via
+GitHub Actions. Its full dependency-tree audit includes development dependencies and
+fails on moderate, high, or critical advisories; low advisories remain visible in the
+audit output but do not fail the build.
 
 ## License
 Code is [MIT](LICENSE). Image assets are licensed separately — see

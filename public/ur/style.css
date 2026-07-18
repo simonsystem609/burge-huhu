@@ -7,6 +7,8 @@ body {
   background: #1a1410;
   display: flex;
   flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 .topbar {
@@ -16,10 +18,19 @@ body {
 .brand { font-weight: 800; color: #d4a060; font-size: 1.1rem; letter-spacing: 1px; }
 .topbar-right { display: flex; gap: 10px; }
 
-#app { flex: 1; display: flex; contain: layout style; }
-.screen { display: none; flex: 1; }
+#app { flex: 1; display: flex; contain: layout style; min-width: 0; min-height: 0; overflow: hidden; }
+.screen { display: none; flex: 1; min-width: 0; min-height: 0; }
 .screen.active { display: flex; flex: 1; }
-#screen-menu.active, #screen-lobby.active { justify-content: center; align-items: flex-start; padding: 40px 16px; }
+#screen-menu.active, #screen-lobby.active {
+  justify-content: flex-start;
+  align-items: center;
+  flex-direction: column;
+  padding: 40px 16px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+}
 #screen-game.active { align-items: stretch; flex: 1; contain: layout style; padding: 12px; gap: 12px; }
 
 button {
@@ -34,6 +45,7 @@ button.ghost { background: transparent; border-color: transparent; color: #d4a06
 button.small { padding: 6px 10px; font-size: 0.85em; }
 
 .menu-card {
+  flex: 0 0 auto;
   width: min(440px, 100%); max-width: 100%; min-width: 0; box-sizing: border-box;
   background: #2a1a10; border: 2px solid #5a3a20;
   border-radius: 12px; padding: 24px; overflow: hidden;
@@ -60,6 +72,8 @@ select { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 input:focus, select:focus { outline: 2px solid #d4a060; }
 #code-input { text-transform: uppercase; letter-spacing: 3px; text-align: center; }
 .menu-actions { display: flex; flex-direction: column; gap: 12px; }
+.matchmake-block { display: flex; flex-direction: column; gap: 6px; }
+.match-count { color: #a08060; font-size: 0.82rem; text-align: center; }
 .divider { height: 1px; background: #5a3a20; margin: 4px 0; }
 .join-row { display: flex; gap: 8px; }
 .join-row input { flex: 1; }
@@ -298,4 +312,8 @@ input:focus, select:focus { outline: 2px solid #d4a060; }
   .sidelog { display: none; }
   #screen-game.active { padding: 8px; gap: 8px; }
   .board { height: min(calc(100vh - 230px), 900px); }
+}
+
+@media (max-height: 700px) {
+  #screen-menu.active, #screen-lobby.active { padding-top: 16px; padding-bottom: 16px; }
 }

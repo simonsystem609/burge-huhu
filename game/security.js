@@ -2,8 +2,8 @@
 
 /**
  * Small, dependency-free guards shared by both games' socket handlers:
- * input sanitizing (name / clientId) and a per-key sliding-window rate
- * limiter for spam-prone socket events (room creation, matchmaking).
+ * payload/input validation and sliding-window rate limiters for spam-prone
+ * socket events (room creation, matchmaking, and gameplay actions).
  */
 
 const NAME_MAX = 40;
@@ -24,11 +24,30 @@ function validateClientId(clientId) {
   return clientId;
 }
 
+/** True only for object literals (including objects with a null prototype). */
+function isPlainObject(value) {
+  if (value === null || typeof value !== 'object') return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * Register a payload-bearing event without ever passing a non-plain value to
+ * a destructuring handler. Malformed payloads are ignored: they cannot mutate
+ * state, emit an error flood, or reach application validation/rate limiting.
+ */
+function onObjectEvent(socket, event, handler) {
+  socket.on(event, (payload) => {
+    if (!isPlainObject(payload)) return;
+    handler(payload);
+  });
+}
+
 /**
  * Returns a `check(key)` function: true if this call is within the limit
  * (and counts against it), false if the key has exceeded `max` calls within
- * `windowMs`. Old entries are pruned lazily on access, so this never grows
- * unbounded even without an explicit cleanup timer.
+ * `windowMs`. An entry is pruned lazily when its key is checked, and a periodic
+ * unref'd sweep removes inactive keys that are never checked again.
  */
 function socketRateLimiter(max, windowMs) {
   const hits = new Map(); // key -> timestamps[]
@@ -63,4 +82,30 @@ function socketRateLimiter(max, windowMs) {
   return check;
 }
 
-module.exports = { validateName, validateClientId, socketRateLimiter };
+/**
+ * Combines a per-socket burst limit with a looser per-IP ceiling. Separate
+ * sockets behind one NAT retain independent normal-play bursts, while the IP
+ * ceiling still prevents reconnecting from resetting the abuse budget.
+ */
+function socketAndIpRateLimiter(socketMax, ipMax, windowMs) {
+  const perSocket = socketRateLimiter(socketMax, windowMs);
+  const perIp = socketRateLimiter(ipMax, windowMs);
+
+  function check(socketId, ip) {
+    if (!perSocket(socketId)) return false;
+    return perIp(ip);
+  }
+
+  check._perSocket = perSocket; // exposed for tests only
+  check._perIp = perIp; // exposed for tests only
+  return check;
+}
+
+module.exports = {
+  validateName,
+  validateClientId,
+  isPlainObject,
+  onObjectEvent,
+  socketRateLimiter,
+  socketAndIpRateLimiter,
+};
