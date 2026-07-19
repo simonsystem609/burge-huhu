@@ -12,6 +12,12 @@ const { applyMove, currentActor, viewFor } = require('./game/engine');
 const { chooseMove } = require('./game/bot');
 const { isCardId } = require('./game/deck');
 const { createKeyedScheduler } = require('./game/keyed-scheduler');
+const {
+  issueSeatToken,
+  verifySeatToken,
+  rotateSeatToken,
+  clearSeatToken,
+} = require('./game/resume-auth');
 const gamelog = require('./game/gamelog');
 const {
   onObjectEvent,
@@ -313,7 +319,7 @@ io.on('connection', (socket) => {
     releaseClientMemberships(clientId, socket.id);
     const room = rm.createRoom(socket.id, clientId, name, lang || 'hu');
     room.botDelay = clampBotDelay(botDelayMs, DEFAULT_BOT_DELAY);
-    socket.emit('joined', { code: room.code });
+    socket.emit('joined', { code: room.code, resumeToken: issueSeatToken(room.seats[0]) });
     emitLobby(room);
   });
 
@@ -338,7 +344,8 @@ io.on('connection', (socket) => {
     if (res.error) {
       return socket.emit('errorMsg', res.error);
     }
-    socket.emit('joined', { code: res.room.code });
+    const seat = res.room.seats.find((s) => s.socketId === socket.id);
+    socket.emit('joined', { code: res.room.code, resumeToken: seat ? issueSeatToken(seat) : undefined });
     emitLobby(res.room);
   });
 
@@ -356,7 +363,7 @@ io.on('connection', (socket) => {
     for (let i = 0; i < botCount; i++) rm.addBot(room);
     rm.startGame(room);
     gamelog.logStart(room);
-    socket.emit('joined', { code: room.code });
+    socket.emit('joined', { code: room.code, resumeToken: issueSeatToken(room.seats[0]) });
     emitGame(room);
     driveBots(room.code);
   });
@@ -394,8 +401,16 @@ io.on('connection', (socket) => {
     emitMatchCount(cardQueue);
     rm.startGame(room);
     gamelog.logStart(room);
-    socketOf(opp.socketId)?.emit('matched', { code: room.code });
-    socket.emit('matched', { code: room.code });
+    const hostSeat = room.seats.find((s) => s.socketId === opp.socketId);
+    const joinSeat = room.seats.find((s) => s.socketId === socket.id);
+    socketOf(opp.socketId)?.emit('matched', {
+      code: room.code,
+      resumeToken: hostSeat ? issueSeatToken(hostSeat) : undefined,
+    });
+    socket.emit('matched', {
+      code: room.code,
+      resumeToken: joinSeat ? issueSeatToken(joinSeat) : undefined,
+    });
     emitGame(room);
     driveBots(room.code);
   });
@@ -528,19 +543,28 @@ io.on('connection', (socket) => {
   // A returning browser: reattach it to whatever seat its clientId holds —
   // singleplayer, waiting lobby or a live game — or point it at the other
   // game if that's where its room lives.
-  onObjectEvent(socket, 'resume', ({ clientId }) => {
+  onObjectEvent(socket, 'resume', ({ clientId, resumeToken }) => {
     clientId = validateClientId(clientId);
     if (!clientId) return;
     if (!roomActionLimiter(socket.id, clientIp(socket.handshake))) {
       return socket.emit('errorMsg', 'rate_limited');
     }
-    const res = rm.resumeClient(clientId, socket.id);
-    if (!res) {
-      if (urFindSeatByClient(clientId)) {
+    // The clientId only says WHO is asking; the resume token is the proof.
+    // Verify against the claimed seat BEFORE touching any state, and stay
+    // quiet on failure — same outward behavior as an unknown clientId, so a
+    // probe learns nothing about which part was wrong.
+    const claimRoom = rm.findRoomByClient(clientId);
+    if (!claimRoom) {
+      const urClaim = urFindSeatByClient(clientId);
+      if (urClaim && verifySeatToken(urClaim.seat, resumeToken)) {
         socket.emit('resumeElsewhere', { game: 'ur' });
       }
       return; // nothing to resume — stay quiet
     }
+    const claimSeat = claimRoom.seats.find((s) => s.clientId === clientId);
+    if (!verifySeatToken(claimSeat, resumeToken)) return;
+    const res = rm.resumeClient(clientId, socket.id);
+    if (!res) return;
     const room = res.room;
     if (res.previousSocketId === socket.id) return;
     if (res.previousSocketId && res.previousSocketId !== socket.id) {
@@ -548,7 +572,10 @@ io.on('connection', (socket) => {
       disconnectCardSession(res.previousSocketId);
     }
     releaseClientMemberships(clientId, socket.id);
-    socket.emit('resumed', { code: room.code });
+    // Rotate on every successful recovery: a token that leaked in the past
+    // goes stale the moment its owner comes back (after a short grace so a
+    // second drop mid-handoff can't lock the real owner out).
+    socket.emit('resumed', { code: room.code, resumeToken: rotateSeatToken(claimSeat) });
     if (room.started) {
       emitGame(room);
       driveBots(room.code);
@@ -695,6 +722,7 @@ function urForgetClient(clientId) {
     if (!seat) continue;
     if (room.game) {
       seat.clientId = null;
+      clearSeatToken(seat);
       seat.isBot = true;
       if (room.game.players[seat.playerIdx]) room.game.players[seat.playerIdx].isBot = true;
     } else {
@@ -719,6 +747,7 @@ function urLeave(socketId) {
   if (seat) {
     seat.socketId = null;
     seat.clientId = null;
+    clearSeatToken(seat); // explicit leave — the resume claim dies with it
     if (room.game) {
       seat.isBot = true;
       if (room.game.players[seat.playerIdx]) room.game.players[seat.playerIdx].isBot = true;
@@ -846,7 +875,7 @@ urIo.on('connection', (socket) => {
       emptySince: null,
     };
     urRooms.set(code, room);
-    socket.emit('joined', { code });
+    socket.emit('joined', { code, resumeToken: issueSeatToken(room.seats[0]) });
     urEmitLobby(room);
   });
 
@@ -867,9 +896,10 @@ urIo.on('connection', (socket) => {
     if (room.seats.length >= 2) return socket.emit('errorMsg', 'Room full');
     if (room.game) return socket.emit('errorMsg', 'Game in progress');
     releaseClientMemberships(clientId, socket.id);
-    room.seats.push({ name: name || 'Player', isBot: false, socketId: socket.id, clientId: clientId || null, playerIdx: 1 });
+    const seat = { name: name || 'Player', isBot: false, socketId: socket.id, clientId: clientId || null, playerIdx: 1 };
+    room.seats.push(seat);
     room.emptySince = null;
-    socket.emit('joined', { code: clean });
+    socket.emit('joined', { code: clean, resumeToken: issueSeatToken(seat) });
     urEmitLobby(room);
   });
 
@@ -900,7 +930,7 @@ urIo.on('connection', (socket) => {
       emptySince: null,
     };
     urRooms.set(code, room);
-    socket.emit('joined', { code });
+    socket.emit('joined', { code, resumeToken: issueSeatToken(room.seats[0]) });
     urEmitGame(room);
     urDriveBots(code);
   });
@@ -956,8 +986,11 @@ urIo.on('connection', (socket) => {
     );
     urRooms.set(code, room);
     emitMatchCount(urQueue);
-    urIo.sockets.get(opp.socketId)?.emit('matched', { code });
-    socket.emit('matched', { code });
+    urIo.sockets.get(opp.socketId)?.emit('matched', {
+      code,
+      resumeToken: issueSeatToken(room.seats[0]),
+    });
+    socket.emit('matched', { code, resumeToken: issueSeatToken(room.seats[1]) });
     urEmitGame(room);
     urDriveBots(code);
   });
@@ -1079,7 +1112,7 @@ urIo.on('connection', (socket) => {
     releaseClientMemberships(validateClientId(clientId), socket.id);
   });
 
-  onObjectEvent(socket, 'resume', ({ clientId }) => {
+  onObjectEvent(socket, 'resume', ({ clientId, resumeToken }) => {
     clientId = validateClientId(clientId);
     if (!clientId) return;
     if (!roomActionLimiter(socket.id, clientIp(socket.handshake))) {
@@ -1088,11 +1121,15 @@ urIo.on('connection', (socket) => {
     const found = urFindSeatByClient(clientId);
     if (!found) {
       const cardRoom = rm.findRoomByClient(clientId);
-      if (cardRoom && cardRoom.seats.some((s) => s.clientId === clientId)) {
+      const cardSeat = cardRoom && cardRoom.seats.find((s) => s.clientId === clientId);
+      if (cardSeat && verifySeatToken(cardSeat, resumeToken)) {
         socket.emit('resumeElsewhere', { game: 'cards' });
       }
       return;
     }
+    // clientId identifies, the token proves — verify before touching state,
+    // and fail silently so probes look identical to unknown clientIds.
+    if (!verifySeatToken(found.seat, resumeToken)) return;
     const { code, room, seat } = found;
     const previousSocketId = seat.socketId;
     if (previousSocketId === socket.id) return;
@@ -1113,7 +1150,7 @@ urIo.on('connection', (socket) => {
       if (!room.hostClientId) room.hostClientId = clientId;
     }
     room.emptySince = null;
-    socket.emit('resumed', { code });
+    socket.emit('resumed', { code, resumeToken: rotateSeatToken(seat) });
     if (room.game) {
       urEmitGame(room);
       urDriveBots(code);

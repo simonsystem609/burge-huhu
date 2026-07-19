@@ -12,6 +12,7 @@
  */
 
 const { createGame } = require('./engine');
+const { clearSeatToken } = require('./resume-auth');
 
 const MAX_SEATS = 4;
 const MIN_SEATS = 2;
@@ -191,6 +192,7 @@ class RoomManager {
     seat.connected = false;
     seat.socketId = null;
     seat.clientId = null;
+    clearSeatToken(seat);
     seat.name = `${seat.name} (bot)`;
     if (!this.hasConnectedHuman(room)) {
       this.rooms.delete(room.code);
@@ -291,6 +293,7 @@ class RoomManager {
         }
       } else {
         seat.clientId = null; // seat stays botified; no resume claim
+        clearSeatToken(seat);
         seat.isBot = true;
         const idx = room.seats.indexOf(seat);
         if (room.game && room.game.players[idx]) room.game.players[idx].isBot = true;

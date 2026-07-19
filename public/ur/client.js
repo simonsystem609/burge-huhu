@@ -89,6 +89,18 @@
     return id;
   }
 
+  // Secret proof that this browser owns its seat (shared with the card
+  // game). Issued by the server on every seat claim, rotated on every
+  // resume; the clientId alone no longer resumes a seat.
+  function resumeToken() {
+    return localStorage.getItem('bh_resume_token') || undefined;
+  }
+  function saveResumeToken(d) {
+    if (d && typeof d.resumeToken === 'string') {
+      localStorage.setItem('bh_resume_token', d.resumeToken);
+    }
+  }
+
   // ── Menu ────────────────────────────────
   $('btn-single').onclick = function () {
     socket.emit('singleplayer', { name: myName(), botDelayMs: botDelay(), mode: gameMode(), clientId: clientId() });
@@ -753,7 +765,10 @@
   // Matchmaking: the searching modal stays up until matched, cancelled, or
   // the connection drops.
   socket.on('matchSearching', function () { showSearch(true); });
-  socket.on('matched', function () { showSearch(false); });
+  socket.on('matched', function (d) {
+    saveResumeToken(d);
+    showSearch(false);
+  });
   socket.on('matchCancelled', function () { showSearch(false); });
   socket.on('matchCount', renderMatchCount);
   // The code belongs to a card-game room — hop over there with the code
@@ -765,8 +780,11 @@
     }, 1500);
   });
   socket.on('leftRoom', function () { showScreen('screen-menu'); });
-  socket.on('joined', function () {});
-  socket.on('resumed', function () { toast('Reconnected — the game picks up where you left it.'); });
+  socket.on('joined', function (d) { saveResumeToken(d); });
+  socket.on('resumed', function (d) {
+    saveResumeToken(d);
+    toast('Reconnected — the game picks up where you left it.');
+  });
   let sessionReplaced = false;
   socket.on('sessionReplaced', function () {
     sessionReplaced = true;
@@ -801,7 +819,7 @@
       socket.emit('joinRoom', { code: code, name: myName(), clientId: clientId() });
       return;
     }
-    socket.emit('resume', { clientId: clientId() });
+    socket.emit('resume', { clientId: clientId(), resumeToken: resumeToken() });
   });
 
   // ── Init ────────────────────────────────

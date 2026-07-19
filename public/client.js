@@ -104,6 +104,18 @@
     return id;
   }
 
+  // Secret proof that this browser owns its seat (shared with the UR game).
+  // Issued by the server on every seat claim, rotated on every resume; the
+  // clientId alone no longer resumes a seat.
+  function resumeToken() {
+    return localStorage.getItem('bh_resume_token') || undefined;
+  }
+  function saveResumeToken(d) {
+    if (d && typeof d.resumeToken === 'string') {
+      localStorage.setItem('bh_resume_token', d.resumeToken);
+    }
+  }
+
   function myBotDelay() {
     return Number(localStorage.getItem('burge_bot_ms')) || 800;
   }
@@ -479,6 +491,9 @@
     // Standalone timeout (not in `timers`): the absorption must happen even
     // if the next view arrives first and resets the choreography timers.
     setTimeout(() => {
+      // settle() reclaims mispredicted discards by removing them from
+      // `discarding`; in that case the element is live again — hands off.
+      if (!discarding.has(cardId)) return;
       discarding.delete(cardId);
       el.remove();
       if (els.get(cardId) === el) els.delete(cardId);
@@ -507,6 +522,17 @@
     const a = anchors();
     const s = gscale();
     const me = sceneView ? sceneView.you : 0;
+    // Never create a second element for a card that is already on screen
+    // (a mispredicted "draw" — e.g. reconnecting over a gap where the card
+    // was actually picked up from the table). Re-keying the map would
+    // orphan the old DOM node: settle() can only remove what the map
+    // references, so the stale copy would sit there for good.
+    if (seat === me && cardId && els.has(cardId)) {
+      const existing = els.get(cardId);
+      stripStateClasses(existing);
+      place(existing, handCenter(a, s));
+      return;
+    }
     const el = makeCardEl(true);
     place(el, talonPos(a, s), { instant: true });
     if (seat === me && cardId) {
@@ -772,6 +798,9 @@
       .map(([key, el]) => ({ key, seat: Number(el.getAttribute('data-preview-seat')) }));
 
     want.forEach((w, cardId) => {
+      // The server says this card is visible — cancel any mispredicted
+      // discard flight so its cleanup timer can't remove the element.
+      discarding.delete(cardId);
       let el = els.get(cardId);
       if (!el) {
         el = makeCardEl(true);
@@ -833,6 +862,14 @@
       });
     });
 
+    // Belt and braces: a .pcard node the map no longer references can never
+    // be moved or removed by any of the reconciliation above — it would sit
+    // on screen as a dead, unclickable duplicate forever. Whatever leak path
+    // produced it, sweep it out here so no orphan survives a settle.
+    const tracked = new Set(els.values());
+    qsa('#card-layer .pcard').forEach((node) => {
+      if (!tracked.has(node)) node.remove();
+    });
   }
 
   // ── Choreography: deal, exchange, refill ─────────────────────────
@@ -1010,8 +1047,18 @@
     return t - stag + ANIM_MS;
   }
 
+  // The first view after a (re)connect must not be choreographed: the scene's
+  // `prev` is from before the gap, and any number of moves may have happened
+  // in between (a bot may have played this seat), so per-move animation
+  // deltas computed against it are fiction — settle straight to the truth.
+  let staleScene = false;
+
   // ── Sync: turn one server view into a timeline of moves + settle ──
   function syncScene(view, quick) {
+    if (staleScene) {
+      staleScene = false;
+      quick = true;
+    }
     clearSceneTimers();
     const prev = sceneView;
     sceneView = view;
@@ -1550,7 +1597,10 @@
   // Matchmaking: the searching modal stays up until we're matched, cancel,
   // or the connection drops.
   socket.on('matchSearching', () => showSearch(true));
-  socket.on('matched', () => showSearch(false));
+  socket.on('matched', (d) => {
+    saveResumeToken(d);
+    showSearch(false);
+  });
   socket.on('matchCancelled', () => showSearch(false));
   socket.on('matchCount', (data = {}) => renderMatchCount(data.count));
   // The code belongs to a Royal Game of Ur room — hop over there with the
@@ -1565,8 +1615,9 @@
     leaveGameUi();
     showScreen('screen-menu');
   });
-  socket.on('joined', () => {});
-  socket.on('resumed', () => {
+  socket.on('joined', (d) => saveResumeToken(d));
+  socket.on('resumed', (d) => {
+    saveResumeToken(d);
     toast(t(lang, 'reconnected'));
   });
   let sessionReplaced = false;
@@ -1591,13 +1642,16 @@
     history.replaceState(null, '', window.location.pathname);
   }
   socket.on('connect', () => {
+    // Reconnecting over a gap: whatever the scene shows is stale now, so the
+    // next view must settle to the truth instead of animating deltas.
+    if (sceneView) staleScene = true;
     if (pendingJoin) {
       const code = pendingJoin;
       pendingJoin = null;
       socket.emit('joinRoom', { code, name: myName(), clientId: clientId() });
       return;
     }
-    socket.emit('resume', { clientId: clientId() });
+    socket.emit('resume', { clientId: clientId(), resumeToken: resumeToken() });
   });
   socket.on('disconnect', () => {
     showSearch(false);
