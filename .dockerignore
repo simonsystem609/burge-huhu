@@ -9,3 +9,6 @@ ref images
 .eslintrc.json
 AGENTS.md
 *.md
+# The Dockerfile COPYs this one into the image (license compliance) — keep
+# it in the build context despite the blanket *.md exclusion above.
+!MEDIA-LICENSES.md

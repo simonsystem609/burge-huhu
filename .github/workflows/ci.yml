@@ -37,3 +37,13 @@ jobs:
           cache: 'npm'
       - run: npm ci
       - run: npm run lint
+
+  # Render deploys this repo via the Dockerfile; a build that only fails on
+  # Render (e.g. a COPY of a file .dockerignore excludes from the context)
+  # would otherwise go unnoticed until the deploy log. Build it here too so
+  # Dockerfile/context drift fails CI instead of production deploys.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - run: docker build -t burge-huhu-ci .
