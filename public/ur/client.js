@@ -103,15 +103,15 @@
 
   // ── Menu ────────────────────────────────
   $('btn-single').onclick = function () {
-    socket.emit('singleplayer', { name: myName(), botDelayMs: botDelay(), mode: gameMode(), clientId: clientId() });
+    socket.emit('singleplayer', { name: myName(), botDelayMs: botDelay(), mode: gameMode(), clientId: clientId(), resumeToken: resumeToken() });
   };
   $('btn-create').onclick = function () {
-    socket.emit('createRoom', { name: myName(), botDelayMs: botDelay(), mode: gameMode(), clientId: clientId() });
+    socket.emit('createRoom', { name: myName(), botDelayMs: botDelay(), mode: gameMode(), clientId: clientId(), resumeToken: resumeToken() });
   };
   $('btn-join').onclick = function () {
     const code = ($('code-input').value || '').trim().toUpperCase();
     if (code.length < 4) return toast('Enter a room code');
-    socket.emit('joinRoom', { code: code, name: myName(), clientId: clientId() });
+    socket.emit('joinRoom', { code: code, name: myName(), clientId: clientId(), resumeToken: resumeToken() });
   };
 
   // ── Matchmaking ─────────────────────────
@@ -124,7 +124,7 @@
   }
   $('btn-matchmake').onclick = function () {
     showSearch(true);
-    socket.emit('findMatch', { name: myName(), botDelayMs: botDelay(), mode: gameMode(), clientId: clientId() });
+    socket.emit('findMatch', { name: myName(), botDelayMs: botDelay(), mode: gameMode(), clientId: clientId(), resumeToken: resumeToken() });
   };
   $('btn-cancel-match').onclick = function () {
     socket.emit('cancelMatch');
@@ -141,7 +141,7 @@
   // Switching games is a deliberate exit: give up our seats first so the
   // card page's auto-resume doesn't bounce us straight back here.
   function gotoCards() {
-    socket.emit('abandon', { clientId: clientId() });
+    socket.emit('abandon', { clientId: clientId(), resumeToken: resumeToken() });
     setTimeout(function () { window.location.href = '/'; }, 150);
   }
   $('btn-back').onclick = gotoCards;
@@ -761,7 +761,11 @@
   socket.on('rolled', function (data) {
     playDiceAnimation(data.player, data.roll);
   });
-  socket.on('errorMsg', function (msg) { showSearch(false); toast(msg); });
+  socket.on('errorMsg', function (msg) {
+    showSearch(false);
+    const text = msg === 'session_auth_failed' ? 'Could not verify the other session. Refresh and try again.' : msg;
+    toast(text);
+  });
   // Matchmaking: the searching modal stays up until matched, cancelled, or
   // the connection drops.
   socket.on('matchSearching', function () { showSearch(true); });
@@ -816,7 +820,7 @@
     if (pendingJoin) {
       const code = pendingJoin;
       pendingJoin = null;
-      socket.emit('joinRoom', { code: code, name: myName(), clientId: clientId() });
+      socket.emit('joinRoom', { code: code, name: myName(), clientId: clientId(), resumeToken: resumeToken() });
       return;
     }
     socket.emit('resume', { clientId: clientId(), resumeToken: resumeToken() });

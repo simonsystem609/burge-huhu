@@ -25,6 +25,7 @@ jobs:
       - run: npm run test:rooms
       - run: npm run test:server
       - run: npm run test:resume
+      - run: npm run test:membership
       - run: npm audit --audit-level=moderate
 
   lint:
