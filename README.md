@@ -112,10 +112,12 @@ Socket.io needs a long-lived connection.
 
 ## Reconnection
 If your connection drops mid-game, the client automatically tries to rejoin. A bot
-takes over your seat temporarily until you reconnect (within the same session).
-A stable browser id is stored in `localStorage` so a page refresh can reclaim your spot.
-Each browser profile can hold one room/matchmaking membership across both games:
-creating or joining somewhere new releases its older claim, while simply reopening
+takes over your seat temporarily until you reconnect. A stable browser id plus a
+separate server-issued random resume credential are stored in `localStorage`, so a
+page refresh can prove ownership and reclaim the same spot. A claim can be released
+or replaced only by its current socket or by a request with that valid credential.
+Each browser profile can hold one room or matchmaking membership across both games:
+an authenticated new-game action releases its older claim, while simply reopening
 the app resumes the existing room and replaces any stale tab connection.
 
 ## Development
@@ -127,10 +129,12 @@ npm run test:ur  # Royal Game of Ur smoke test (100 simulated games)
 npm run test:security # malformed payload, rate-limit, and Ur mode checks
 npm run test:rooms    # lobby reopen/session takeover checks
 npm run test:server   # live socket guards and resume-abuse checks
+npm run test:resume   # token lifecycle and normal reload/rejoin checks
+npm run test:membership # claim takeover, self-join, queue, and cross-game checks
 npm run dev      # auto-restart on file changes
 ```
 
-CI runs the card, Ur, and socket-security tests plus `npm run lint` on every push via
+CI runs the card, Ur, socket, resume, and membership-security tests plus `npm run lint` on every push via
 GitHub Actions. Its full dependency-tree audit includes development dependencies and
 fails on moderate, high, or critical advisories; low advisories remain visible in the
 audit output but do not fail the build.

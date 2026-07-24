@@ -253,29 +253,33 @@ class RoomManager {
    * moved so that stale socket cannot keep acting. Returns
    * { room, seatIdx, previousSocketId } or null if no seat exists.
    */
+  resumeSeat(room, seat, newSocketId) {
+    if (!room || !seat || !room.seats.includes(seat) || !newSocketId) return null;
+    const previousSocketId = seat.socketId;
+    seat.socketId = newSocketId;
+    seat.connected = true;
+    if (seat._humanName) {
+      seat.name = seat._humanName;
+      seat._humanName = null;
+    }
+    if (seat.isBot) {
+      seat.isBot = false;
+      const idx = room.seats.indexOf(seat);
+      if (room.game && room.game.players[idx]) room.game.players[idx].isBot = false;
+    }
+    if (room.hostClientId === seat.clientId || !room.seats.some((s) => s.socketId === room.hostId)) {
+      room.hostId = newSocketId;
+      if (!room.hostClientId) room.hostClientId = seat.clientId;
+    }
+    room.emptySince = null;
+    return { room, seatIdx: room.seats.indexOf(seat), previousSocketId };
+  }
+
   resumeClient(clientId, newSocketId) {
     if (!clientId) return null;
     for (const room of this.rooms.values()) {
       const seat = room.seats.find((s) => s.clientId === clientId);
-      if (!seat) continue;
-      const previousSocketId = seat.socketId;
-      seat.socketId = newSocketId;
-      seat.connected = true;
-      if (seat._humanName) {
-        seat.name = seat._humanName;
-        seat._humanName = null;
-      }
-      if (seat.isBot) {
-        seat.isBot = false;
-        const idx = room.seats.indexOf(seat);
-        if (room.game && room.game.players[idx]) room.game.players[idx].isBot = false;
-      }
-      if (room.hostClientId === clientId || !room.seats.some((s) => s.socketId === room.hostId)) {
-        room.hostId = newSocketId;
-        if (!room.hostClientId) room.hostClientId = clientId;
-      }
-      room.emptySince = null;
-      return { room, seatIdx: room.seats.indexOf(seat), previousSocketId };
+      if (seat) return this.resumeSeat(room, seat, newSocketId);
     }
     return null;
   }

@@ -127,13 +127,14 @@
       bots: Number($('bot-count').value),
       botDelayMs: myBotDelay(),
       clientId: clientId(),
+      resumeToken: resumeToken(),
     });
   $('btn-create').onclick = () =>
-    socket.emit('createRoom', { name: myName(), lang, botDelayMs: myBotDelay(), clientId: clientId() });
+    socket.emit('createRoom', { name: myName(), lang, botDelayMs: myBotDelay(), clientId: clientId(), resumeToken: resumeToken() });
   // Switching games is a deliberate exit: give up our seats first so the
   // UR page's auto-resume doesn't bounce us straight back here.
   $('btn-goto-ur').onclick = () => {
-    socket.emit('abandon', { clientId: clientId() });
+    socket.emit('abandon', { clientId: clientId(), resumeToken: resumeToken() });
     setTimeout(() => {
       window.location.href = '/ur/';
     }, 150);
@@ -141,7 +142,7 @@
   $('btn-join').onclick = () => {
     const code = ($('code-input').value || '').trim().toUpperCase();
     if (code.length < 4) return toast(t(lang, 'err_no_room'));
-    socket.emit('joinRoom', { code, name: myName(), clientId: clientId() });
+    socket.emit('joinRoom', { code, name: myName(), clientId: clientId(), resumeToken: resumeToken() });
   };
   $('code-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') $('btn-join').click();
@@ -153,7 +154,7 @@
   }
   $('btn-matchmake').onclick = () => {
     showSearch(true);
-    socket.emit('findMatch', { name: myName(), lang, botDelayMs: myBotDelay(), clientId: clientId() });
+    socket.emit('findMatch', { name: myName(), lang, botDelayMs: myBotDelay(), clientId: clientId(), resumeToken: resumeToken() });
   };
   $('btn-cancel-match').onclick = () => {
     socket.emit('cancelMatch');
@@ -1648,7 +1649,7 @@
     if (pendingJoin) {
       const code = pendingJoin;
       pendingJoin = null;
-      socket.emit('joinRoom', { code, name: myName(), clientId: clientId() });
+      socket.emit('joinRoom', { code, name: myName(), clientId: clientId(), resumeToken: resumeToken() });
       return;
     }
     socket.emit('resume', { clientId: clientId(), resumeToken: resumeToken() });

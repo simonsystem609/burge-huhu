@@ -13,6 +13,7 @@
     "test:rooms": "node test/rooms.js",
     "test:server": "node test/server-abuse.js",
     "test:resume": "node test/resume-auth.js",
+    "test:membership": "node test/membership-auth.js",
     "lint": "eslint . --ext .js"
   },
   "engines": {

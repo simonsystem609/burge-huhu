@@ -1,8 +1,6 @@
 'use strict';
 
 const assert = require('assert');
-const fs = require('fs');
-const path = require('path');
 const { RoomManager } = require('../game/rooms');
 
 const rooms = new RoomManager();
@@ -40,17 +38,5 @@ const activeGame = secondRoom.game;
 assert.strictEqual(rooms.startGame(secondRoom).error, 'in_progress');
 assert.strictEqual(secondRoom.game, activeGame);
 
-// Keep the server wiring exhaustive: four membership entry points per game,
-// plus the now-prevalidated resume in both namespaces, pass the clean id
-// directly. Abandon still validates inline in both namespaces.
-const serverSource = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-assert.strictEqual(
-  (serverSource.match(/releaseClientMemberships\(clientId, socket\.id\)/g) || []).length,
-  10
-);
-assert.strictEqual(
-  (serverSource.match(/releaseClientMemberships\(validateClientId\(clientId\), socket\.id\)/g) || []).length,
-  2
-);
 
-console.log('PASS: lobby takeover, resume, and single-membership wiring checks');
+console.log('PASS: lobby takeover, exact-seat resume, and active-game checks');

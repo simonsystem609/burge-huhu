@@ -103,11 +103,14 @@ const cardBotScheduler = createKeyedScheduler();
 const urBotScheduler = createKeyedScheduler();
 
 function dequeue(queue, socketId) {
-  const i = queue.findIndex((e) => e.socketId === socketId);
-  if (i === -1) return false;
-  queue.splice(i, 1);
-  emitMatchCount(queue);
-  return true;
+  let changed = false;
+  for (let i = queue.length - 1; i >= 0; i--) {
+    if (queue[i].socketId !== socketId) continue;
+    queue.splice(i, 1);
+    changed = true;
+  }
+  if (changed) emitMatchCount(queue);
+  return changed;
 }
 
 function enqueueMatch(queue, entry) {
@@ -309,21 +312,23 @@ function leaveCardSocket(socketId) {
 io.on('connection', (socket) => {
   socket.emit('matchCount', { count: cardQueue.length });
 
-  onObjectEvent(socket, 'createRoom', ({ name, lang, botDelayMs, clientId }) => {
+  onObjectEvent(socket, 'createRoom', ({ name, lang, botDelayMs, clientId, resumeToken }) => {
     if (!roomActionLimiter(socket.id, clientIp(socket.handshake))) return socket.emit('errorMsg', 'rate_limited');
     const existing = rm.findRoomBySocket(socket.id);
     if (existing) return socket.emit('errorMsg', 'already_in_room');
     if (totalRoomCount() >= MAX_ROOMS) return socket.emit('errorMsg', 'server_full');
     name = validateName(name);
     clientId = validateClientId(clientId);
-    releaseClientMemberships(clientId, socket.id);
+    if (!authorizeMembershipChange(socket, clientId, resumeToken)) return;
+    dequeue(cardQueue, socket.id);
+    releaseClientMemberships(clientId);
     const room = rm.createRoom(socket.id, clientId, name, lang || 'hu');
     room.botDelay = clampBotDelay(botDelayMs, DEFAULT_BOT_DELAY);
     socket.emit('joined', { code: room.code, resumeToken: issueSeatToken(room.seats[0]) });
     emitLobby(room);
   });
 
-  onObjectEvent(socket, 'joinRoom', ({ code, name, clientId }) => {
+  onObjectEvent(socket, 'joinRoom', ({ code, name, clientId, resumeToken }) => {
     if (!roomActionLimiter(socket.id, clientIp(socket.handshake))) return socket.emit('errorMsg', 'rate_limited');
     if (rm.findRoomBySocket(socket.id)) return socket.emit('errorMsg', 'already_in_room');
     const clean = String(code || '').trim().toUpperCase().slice(0, 8);
@@ -334,12 +339,19 @@ io.on('connection', (socket) => {
       if (urRooms.has(clean)) return socket.emit('wrongGame', { game: 'ur', code: clean });
       return socket.emit('errorMsg', 'no_room');
     }
+    const targetSeat = clientId ? targetRoom.seats.find((seat) => seat.clientId === clientId) : null;
+    if (targetSeat) {
+      if (!authorizeMembershipChange(socket, clientId, resumeToken)) return;
+      return resumeCardClaim(socket, clientId, targetRoom, targetSeat);
+    }
     if (targetRoom.single) return socket.emit('errorMsg', 'no_room');
     if (targetRoom.started) return socket.emit('errorMsg', 'in_progress');
     if (targetRoom.seats.filter((s) => s.socketId || s.isBot).length >= MAX_SEATS) {
       return socket.emit('errorMsg', 'full');
     }
-    releaseClientMemberships(clientId, socket.id);
+    if (!authorizeMembershipChange(socket, clientId, resumeToken)) return;
+    dequeue(cardQueue, socket.id);
+    releaseClientMemberships(clientId);
     const res = rm.joinRoom(clean, socket.id, clientId, name);
     if (res.error) {
       return socket.emit('errorMsg', res.error);
@@ -349,14 +361,16 @@ io.on('connection', (socket) => {
     emitLobby(res.room);
   });
 
-  onObjectEvent(socket, 'singleplayer', ({ name, lang, bots, botDelayMs, clientId }) => {
+  onObjectEvent(socket, 'singleplayer', ({ name, lang, bots, botDelayMs, clientId, resumeToken }) => {
     if (!roomActionLimiter(socket.id, clientIp(socket.handshake))) return socket.emit('errorMsg', 'rate_limited');
     const existing = rm.findRoomBySocket(socket.id);
     if (existing) return socket.emit('errorMsg', 'already_in_room');
     if (totalRoomCount() >= MAX_ROOMS) return socket.emit('errorMsg', 'server_full');
     name = validateName(name);
     clientId = validateClientId(clientId);
-    releaseClientMemberships(clientId, socket.id);
+    if (!authorizeMembershipChange(socket, clientId, resumeToken)) return;
+    dequeue(cardQueue, socket.id);
+    releaseClientMemberships(clientId);
     const room = rm.createRoom(socket.id, clientId, name, lang || 'hu', { single: true });
     room.botDelay = clampBotDelay(botDelayMs, DEFAULT_BOT_DELAY);
     const botCount = Math.min(Math.max(Number(bots) || 1, 1), MAX_SEATS - 1);
@@ -370,20 +384,24 @@ io.on('connection', (socket) => {
 
   // Matchmaking: pair with another searching player into a fresh 2-player
   // game, or wait in the queue until one arrives.
-  onObjectEvent(socket, 'findMatch', ({ name, lang, botDelayMs, clientId }) => {
+  onObjectEvent(socket, 'findMatch', ({ name, lang, botDelayMs, clientId, resumeToken }) => {
     if (!roomActionLimiter(socket.id, clientIp(socket.handshake))) return socket.emit('errorMsg', 'rate_limited');
     if (rm.findRoomBySocket(socket.id)) return socket.emit('errorMsg', 'already_in_room');
     if (totalRoomCount() >= MAX_ROOMS) return socket.emit('errorMsg', 'server_full');
     name = validateName(name);
     clientId = validateClientId(clientId);
-    releaseClientMemberships(clientId, socket.id);
+    if (!authorizeMembershipChange(socket, clientId, resumeToken)) return;
     dequeue(cardQueue, socket.id); // no duplicate entries for this socket
+    releaseClientMemberships(clientId);
 
     let opp = null;
     while (cardQueue.length) {
       const cand = cardQueue.shift();
       const s = socketOf(cand.socketId);
-      if (s && cand.socketId !== socket.id && cand.clientId !== clientId) { opp = cand; break; }
+      const boundId = s && Object.hasOwn(s.data, 'clientId') ? s.data.clientId : undefined;
+      if (s && !rm.findRoomBySocket(cand.socketId) && !urFindRoomBySocket(cand.socketId) &&
+          cand.socketId !== socket.id && cand.clientId !== clientId &&
+          boundId === (cand.clientId || null)) { opp = cand; break; }
     }
 
     if (!opp) {
@@ -534,10 +552,18 @@ io.on('connection', (socket) => {
 
   // Deliberate exit (switching games): give up every seat this browser
   // holds in BOTH games so resume won't drag it back.
-  onObjectEvent(socket, 'abandon', ({ clientId }) => {
+  onObjectEvent(socket, 'abandon', ({ clientId, resumeToken }) => {
+    if (!roomActionLimiter(socket.id, clientIp(socket.handshake))) {
+      return socket.emit('errorMsg', 'rate_limited');
+    }
+    const current = socketMemberships(socket.id);
+    if (current.length > 1) return socket.emit('errorMsg', 'session_auth_failed');
+    const requestedId = validateClientId(clientId);
+    const effectiveId = current.length === 1 ? current[0].clientId : requestedId;
+    if (!authorizeMembershipChange(socket, effectiveId, resumeToken)) return;
     dequeue(cardQueue, socket.id);
     leaveCardSocket(socket.id);
-    releaseClientMemberships(validateClientId(clientId), socket.id);
+    releaseClientMemberships(effectiveId);
   });
 
   // A returning browser: reattach it to whatever seat its clientId holds —
@@ -563,25 +589,8 @@ io.on('connection', (socket) => {
     }
     const claimSeat = claimRoom.seats.find((s) => s.clientId === clientId);
     if (!verifySeatToken(claimSeat, resumeToken)) return;
-    const res = rm.resumeClient(clientId, socket.id);
-    if (!res) return;
-    const room = res.room;
-    if (res.previousSocketId === socket.id) return;
-    if (res.previousSocketId && res.previousSocketId !== socket.id) {
-      dequeue(cardQueue, res.previousSocketId);
-      disconnectCardSession(res.previousSocketId);
-    }
-    releaseClientMemberships(clientId, socket.id);
-    // Rotate on every successful recovery: a token that leaked in the past
-    // goes stale the moment its owner comes back (after a short grace so a
-    // second drop mid-handoff can't lock the real owner out).
-    socket.emit('resumed', { code: room.code, resumeToken: rotateSeatToken(claimSeat) });
-    if (room.started) {
-      emitGame(room);
-      driveBots(room.code);
-    } else {
-      emitLobby(room);
-    }
+    if (!bindResumeSocket(socket, clientId, claimSeat)) return;
+    resumeCardClaim(socket, clientId, claimRoom, claimSeat);
   });
 });
 
@@ -798,6 +807,87 @@ function disconnectUrSession(socketId) {
   oldSocket.disconnect(true);
 }
 
+function clientClaims(clientId) {
+  const seats = [];
+  for (const room of [...rm.rooms.values(), ...urRooms.values()]) {
+    for (const seat of room.seats) {
+      if (seat.clientId === clientId) seats.push({ room, seat });
+    }
+  }
+  const queues = [];
+  for (const entry of cardQueue) if (entry.clientId === clientId) queues.push({ game: 'cards', entry });
+  for (const entry of urQueue) if (entry.clientId === clientId) queues.push({ game: 'ur', entry });
+  return { seats, queues };
+}
+
+function socketMemberships(socketId) {
+  const claims = [];
+  for (const room of [...rm.rooms.values(), ...urRooms.values()]) {
+    for (const seat of room.seats) {
+      if (seat.socketId === socketId) claims.push({ clientId: seat.clientId || null, seat, queue: null });
+    }
+  }
+  for (const entry of cardQueue) {
+    if (entry.socketId === socketId) claims.push({ clientId: entry.clientId || null, seat: null, queue: entry });
+  }
+  for (const entry of urQueue) {
+    if (entry.socketId === socketId) claims.push({ clientId: entry.clientId || null, seat: null, queue: entry });
+  }
+  return claims;
+}
+
+function socketClientCompatible(socket, clientId) {
+  if (Object.hasOwn(socket.data, 'clientId') && socket.data.clientId !== clientId) return false;
+  const current = socketMemberships(socket.id);
+  return current.length <= 1 && current.every((claim) => claim.clientId === clientId);
+}
+
+function authorizeMembershipChange(socket, clientId, resumeToken) {
+  if (!socketClientCompatible(socket, clientId)) {
+    socket.emit('errorMsg', 'session_auth_failed');
+    return false;
+  }
+  if (!clientId) {
+    socket.data.clientId = null;
+    return true;
+  }
+  const { seats, queues } = clientClaims(clientId);
+  const total = seats.length + queues.length;
+  let allowed = total === 0;
+  if (total === 1 && seats.length === 1) {
+    const seat = seats[0].seat;
+    allowed = seat.socketId === socket.id || verifySeatToken(seat, resumeToken);
+  } else if (total === 1 && queues.length === 1) {
+    allowed = queues[0].entry.socketId === socket.id;
+  }
+  if (!allowed) {
+    socket.emit('errorMsg', 'session_auth_failed');
+    return false;
+  }
+  socket.data.clientId = clientId;
+  return true;
+}
+
+function bindResumeSocket(socket, clientId, targetSeat) {
+  if (!socketClientCompatible(socket, clientId)) {
+    socket.emit('errorMsg', 'already_in_room');
+    return false;
+  }
+  const { seats, queues } = clientClaims(clientId);
+  if (seats.length !== 1 || seats[0].seat !== targetSeat ||
+      queues.some(({ entry }) => entry.socketId !== socket.id)) {
+    socket.emit('errorMsg', 'already_in_room');
+    return false;
+  }
+  const current = socketMemberships(socket.id);
+  if (current.some((claim) => claim.seat && claim.seat !== targetSeat)) {
+    socket.emit('errorMsg', 'already_in_room');
+    return false;
+  }
+  socket.data.clientId = clientId;
+  return true;
+}
+
 /**
  * Enforce one live membership per browser client id across both games.
  * `keepSocketId` is the seat just resumed by this request; every other room,
@@ -845,6 +935,54 @@ function releaseClientMemberships(clientId, keepSocketId = null) {
   for (const socketId of urSockets) disconnectUrSession(socketId);
 }
 
+function resumeCardClaim(socket, clientId, room, seat) {
+  const res = rm.resumeSeat(room, seat, socket.id);
+  if (!res) return false;
+  if (res.previousSocketId === socket.id) return true;
+  if (res.previousSocketId) {
+    dequeue(cardQueue, res.previousSocketId);
+    disconnectCardSession(res.previousSocketId);
+  }
+  releaseClientMemberships(clientId, socket.id);
+  socket.emit('resumed', { code: room.code, resumeToken: rotateSeatToken(seat) });
+  if (room.started) {
+    emitGame(room);
+    driveBots(room.code);
+  } else {
+    emitLobby(room);
+  }
+  return true;
+}
+
+function resumeUrClaim(socket, clientId, found) {
+  const { code, room, seat } = found;
+  const previousSocketId = seat.socketId;
+  if (previousSocketId === socket.id) return true;
+  seat.socketId = socket.id;
+  if (previousSocketId) {
+    dequeue(urQueue, previousSocketId);
+    disconnectUrSession(previousSocketId);
+  }
+  releaseClientMemberships(clientId, socket.id);
+  if (seat.isBot) {
+    seat.isBot = false;
+    if (room.game && room.game.players[seat.playerIdx]) room.game.players[seat.playerIdx].isBot = false;
+  }
+  if (room.hostClientId === clientId || !room.seats.some((s) => s.socketId === room.hostId)) {
+    room.hostId = socket.id;
+    if (!room.hostClientId) room.hostClientId = clientId;
+  }
+  room.emptySince = null;
+  socket.emit('resumed', { code, resumeToken: rotateSeatToken(seat) });
+  if (room.game) {
+    urEmitGame(room);
+    urDriveBots(code);
+  } else {
+    urEmitLobby(room);
+  }
+  return true;
+}
+
 urIo.on('connection', (socket) => {
   socket.emit('matchCount', { count: urQueue.length });
 
@@ -856,13 +994,15 @@ urIo.on('connection', (socket) => {
     return Object.hasOwn(urEngine.MODES, mode) ? mode : 'finkel';
   }
 
-  onObjectEvent(socket, 'createRoom', ({ name, botDelayMs, mode, clientId }) => {
+  onObjectEvent(socket, 'createRoom', ({ name, botDelayMs, mode, clientId, resumeToken }) => {
     if (!roomActionLimiter(socket.id, clientIp(socket.handshake))) return socket.emit('errorMsg', 'rate_limited');
     if (urFindRoomBySocket(socket.id)) return socket.emit('errorMsg', 'already_in_room');
     if (totalRoomCount() >= MAX_ROOMS) return socket.emit('errorMsg', 'server_full');
     name = validateName(name);
     clientId = validateClientId(clientId);
-    releaseClientMemberships(clientId, socket.id);
+    if (!authorizeMembershipChange(socket, clientId, resumeToken)) return;
+    dequeue(urQueue, socket.id);
+    releaseClientMemberships(clientId);
     const code = urMakeCode();
     const room = {
       code,
@@ -879,7 +1019,7 @@ urIo.on('connection', (socket) => {
     urEmitLobby(room);
   });
 
-  onObjectEvent(socket, 'joinRoom', ({ code, name, clientId }) => {
+  onObjectEvent(socket, 'joinRoom', ({ code, name, clientId, resumeToken }) => {
     if (!roomActionLimiter(socket.id, clientIp(socket.handshake))) return socket.emit('errorMsg', 'rate_limited');
     if (urFindRoomBySocket(socket.id)) return socket.emit('errorMsg', 'already_in_room');
     name = validateName(name);
@@ -893,9 +1033,16 @@ urIo.on('connection', (socket) => {
       }
       return socket.emit('errorMsg', 'Room not found');
     }
+    const targetSeat = clientId ? room.seats.find((seat) => seat.clientId === clientId) : null;
+    if (targetSeat) {
+      if (!authorizeMembershipChange(socket, clientId, resumeToken)) return;
+      return resumeUrClaim(socket, clientId, { code: clean, room, seat: targetSeat });
+    }
     if (room.seats.length >= 2) return socket.emit('errorMsg', 'Room full');
     if (room.game) return socket.emit('errorMsg', 'Game in progress');
-    releaseClientMemberships(clientId, socket.id);
+    if (!authorizeMembershipChange(socket, clientId, resumeToken)) return;
+    dequeue(urQueue, socket.id);
+    releaseClientMemberships(clientId);
     const seat = { name: name || 'Player', isBot: false, socketId: socket.id, clientId: clientId || null, playerIdx: 1 };
     room.seats.push(seat);
     room.emptySince = null;
@@ -903,13 +1050,15 @@ urIo.on('connection', (socket) => {
     urEmitLobby(room);
   });
 
-  onObjectEvent(socket, 'singleplayer', ({ name, botDelayMs, mode, clientId }) => {
+  onObjectEvent(socket, 'singleplayer', ({ name, botDelayMs, mode, clientId, resumeToken }) => {
     if (!roomActionLimiter(socket.id, clientIp(socket.handshake))) return socket.emit('errorMsg', 'rate_limited');
     if (urFindRoomBySocket(socket.id)) return socket.emit('errorMsg', 'already_in_room');
     if (totalRoomCount() >= MAX_ROOMS) return socket.emit('errorMsg', 'server_full');
     name = validateName(name);
     clientId = validateClientId(clientId);
-    releaseClientMemberships(clientId, socket.id);
+    if (!authorizeMembershipChange(socket, clientId, resumeToken)) return;
+    dequeue(urQueue, socket.id);
+    releaseClientMemberships(clientId);
     const code = urMakeCode();
     const cleanMode = urCleanMode(mode);
     const room = {
@@ -937,20 +1086,24 @@ urIo.on('connection', (socket) => {
 
   // Matchmaking: pair with another searching player into a fresh 2-player
   // game (using the waiting player's chosen mode), or wait in the queue.
-  onObjectEvent(socket, 'findMatch', ({ name, botDelayMs, mode, clientId }) => {
+  onObjectEvent(socket, 'findMatch', ({ name, botDelayMs, mode, clientId, resumeToken }) => {
     if (!roomActionLimiter(socket.id, clientIp(socket.handshake))) return socket.emit('errorMsg', 'rate_limited');
     if (urFindRoomBySocket(socket.id)) return socket.emit('errorMsg', 'already_in_room');
     if (totalRoomCount() >= MAX_ROOMS) return socket.emit('errorMsg', 'server_full');
     name = validateName(name);
     clientId = validateClientId(clientId);
-    releaseClientMemberships(clientId, socket.id);
+    if (!authorizeMembershipChange(socket, clientId, resumeToken)) return;
     dequeue(urQueue, socket.id);
+    releaseClientMemberships(clientId);
 
     let opp = null;
     while (urQueue.length) {
       const cand = urQueue.shift();
       const s = urIo.sockets.get(cand.socketId);
-      if (s && cand.socketId !== socket.id && cand.clientId !== clientId) { opp = cand; break; }
+      const boundId = s && Object.hasOwn(s.data, 'clientId') ? s.data.clientId : undefined;
+      if (s && !urFindRoomBySocket(cand.socketId) && !rm.findRoomBySocket(cand.socketId) &&
+          cand.socketId !== socket.id && cand.clientId !== clientId &&
+          boundId === (cand.clientId || null)) { opp = cand; break; }
     }
 
     if (!opp) {
@@ -1106,10 +1259,18 @@ urIo.on('connection', (socket) => {
   });
 
   // Deliberate exit (switching games): drop every seat in both games.
-  onObjectEvent(socket, 'abandon', ({ clientId }) => {
+  onObjectEvent(socket, 'abandon', ({ clientId, resumeToken }) => {
+    if (!roomActionLimiter(socket.id, clientIp(socket.handshake))) {
+      return socket.emit('errorMsg', 'rate_limited');
+    }
+    const current = socketMemberships(socket.id);
+    if (current.length > 1) return socket.emit('errorMsg', 'session_auth_failed');
+    const requestedId = validateClientId(clientId);
+    const effectiveId = current.length === 1 ? current[0].clientId : requestedId;
+    if (!authorizeMembershipChange(socket, effectiveId, resumeToken)) return;
     dequeue(urQueue, socket.id);
     urLeave(socket.id);
-    releaseClientMemberships(validateClientId(clientId), socket.id);
+    releaseClientMemberships(effectiveId);
   });
 
   onObjectEvent(socket, 'resume', ({ clientId, resumeToken }) => {
@@ -1130,33 +1291,8 @@ urIo.on('connection', (socket) => {
     // clientId identifies, the token proves — verify before touching state,
     // and fail silently so probes look identical to unknown clientIds.
     if (!verifySeatToken(found.seat, resumeToken)) return;
-    const { code, room, seat } = found;
-    const previousSocketId = seat.socketId;
-    if (previousSocketId === socket.id) return;
-    seat.socketId = socket.id;
-    if (previousSocketId && previousSocketId !== socket.id) {
-      dequeue(urQueue, previousSocketId);
-      disconnectUrSession(previousSocketId);
-    }
-    releaseClientMemberships(clientId, socket.id);
-    if (seat.isBot) {
-      seat.isBot = false;
-      if (room.game && room.game.players[seat.playerIdx]) {
-        room.game.players[seat.playerIdx].isBot = false;
-      }
-    }
-    if (room.hostClientId === clientId || !room.seats.some((s) => s.socketId === room.hostId)) {
-      room.hostId = socket.id;
-      if (!room.hostClientId) room.hostClientId = clientId;
-    }
-    room.emptySince = null;
-    socket.emit('resumed', { code, resumeToken: rotateSeatToken(seat) });
-    if (room.game) {
-      urEmitGame(room);
-      urDriveBots(code);
-    } else {
-      urEmitLobby(room);
-    }
+    if (!bindResumeSocket(socket, clientId, found.seat)) return;
+    resumeUrClaim(socket, clientId, found);
   });
 
   socket.on('rematch', () => {
