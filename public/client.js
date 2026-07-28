@@ -73,6 +73,7 @@
 
   function showScreen(id) {
     qsa('.screen').forEach((s) => s.classList.toggle('active', s.id === id));
+    $('btn-leave-game').hidden = id !== 'screen-game';
   }
 
   let toastTimer = null;
