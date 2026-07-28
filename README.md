@@ -50,7 +50,7 @@ node test/smoke.js
 server.js          Express + Socket.io wiring, bot turn driver
 game/deck.js       32-card deck, shuffle, beat logic
 game/engine.js     pure rules: deal, legal moves, apply move, win/lose
-game/bot.js        heuristic AI opponent
+game/bot.js        public-information card-counting and search AI
 game/rooms.js      lobby / room / seat management
 public/            front-end (vanilla JS, no build step)
 public/cards_img/  cropped card-face photos — see CREDIT.txt (CC BY-SA 4.0)
@@ -127,17 +127,27 @@ npm run lint     # ESLint
 npm test         # card smoke test (900 simulated games)
 npm run test:ur  # Royal Game of Ur smoke test (100 simulated games)
 npm run test:security # malformed payload, rate-limit, and Ur mode checks
+npm run test:bot      # bot planning and hidden-information firewall
 npm run test:rooms    # lobby reopen/session takeover checks
 npm run test:server   # live socket guards and resume-abuse checks
 npm run test:resume   # token lifecycle and normal reload/rejoin checks
 npm run test:membership # claim takeover, self-join, queue, and cross-game checks
 npm run dev      # auto-restart on file changes
+node scripts/train-bot.js benchmark 2000 # paired race vs frozen Claude bot
+node scripts/train-bot.js train 40 250   # exploratory 2-player league training
 ```
 
-CI runs the card, Ur, socket, resume, and membership-security tests plus `npm run lint` on every push via
-GitHub Actions. Its full dependency-tree audit includes development dependencies and
-fails on moderate, high, or critical advisories; low advisories remain visible in the
-audit output but do not fail the build.
+Training uses mirrored two-player deals so both policies receive every seat. Random
+personality and temperature exploration is allowed during candidate discovery, but
+an improvement is accepted only after deterministic validation against the frozen
+Claude policy and the current champion on separate seeds. Three- and four-player
+games are holdout checks, not the learning arena.
+
+CI runs the card, Ur, bot, socket, resume, and membership-security tests plus
+`npm run lint` on every push via GitHub Actions. Its full dependency-tree audit
+includes development dependencies and fails on moderate, high, or critical
+advisories; low advisories remain visible in the audit output but do not fail the
+build.
 
 ## License
 Code is [MIT](LICENSE). Image assets are licensed separately — see
