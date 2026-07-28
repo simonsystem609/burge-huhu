@@ -3,16 +3,16 @@
 /**
  * Card-bot arena + trainer.
  *
- *   node scripts/train-bot.js                 evaluate current weights vs the
- *                                             frozen Claude bot and old bot
- *   node scripts/train-bot.js train [iters] [deals]
+ *   node scripts/train-bot.js                 evaluate current weights against
+ *                                             all frozen references
+ *   node scripts/train-bot.js train [iters] [deals] [seed]
  *                                             evolve the weight vector through
  *                                             exploratory self-play, then
  *                                             validate on unseen seeded deals
  *
  * A "deal" is always raced twice with the policies swapping seats. Candidate
  * discovery uses seeded personality/temperature exploration; acceptance and
- * the final Claude race are deterministic and use disjoint seeds.
+ * all confirmation races are deterministic and use disjoint seeds.
  */
 
 const { createGame, currentActor, applyMove } = require('../game/engine');
@@ -117,6 +117,16 @@ function claudeChooser(seed, style, temp) {
     });
 }
 
+function previousChooser(seed, style, temp) {
+  const policyRng = mulberry32(seed);
+  return (state, player) =>
+    newBot.choosePreviousMove(state, player, undefined, {
+      style,
+      temp,
+      rng: policyRng,
+    });
+}
+
 function resultRecord() {
   return { games: 0, wins: 0, losses: 0, draws: 0, points: 0 };
 }
@@ -166,8 +176,14 @@ function head2head(wA, wB, deals, seedBase, explore = false) {
   return finishResult(result);
 }
 
-/** Current policy against the exact pre-improvement Claude policy. */
-function raceClaude(weights, deals, seedBase, explore = false, temperature) {
+function raceReference(
+  weights,
+  deals,
+  seedBase,
+  referenceChooser,
+  explore = false,
+  temperature
+) {
   const result = resultRecord();
   for (let deal = 0; deal < deals; deal++) {
     for (let candidateSeat = 0; candidateSeat < 2; candidateSeat++) {
@@ -179,7 +195,7 @@ function raceClaude(weights, deals, seedBase, explore = false, temperature) {
         choosers.push(
           seat === candidateSeat
             ? weightedChooser(weights, seed, style, temp)
-            : claudeChooser(seed, style, temp)
+            : referenceChooser(seed, style, temp)
         );
       }
       const loser = playGame(choosers, mulberry32(seedBase + deal));
@@ -187,6 +203,30 @@ function raceClaude(weights, deals, seedBase, explore = false, temperature) {
     }
   }
   return finishResult(result);
+}
+
+/** Current policy against the exact pre-improvement Claude policy. */
+function raceClaude(weights, deals, seedBase, explore = false, temperature) {
+  return raceReference(
+    weights,
+    deals,
+    seedBase,
+    claudeChooser,
+    explore,
+    temperature
+  );
+}
+
+/** Current policy against the smarter bot pushed in da9b376. */
+function racePrevious(weights, deals, seedBase, explore = false, temperature) {
+  return raceReference(
+    weights,
+    deals,
+    seedBase,
+    previousChooser,
+    explore,
+    temperature
+  );
 }
 
 /** One current bot against a table of frozen Claude bots, rotating every seat. */
@@ -284,29 +324,30 @@ function printRace(label, result) {
 }
 
 /**
- * Evolutionary league training with three gates:
- *  1. improve against frozen Claude under exploratory styles/temperature;
+ * Evolutionary league training with four gates:
+ *  1. improve against the previous smart bot under styles/temperature;
  *  2. confirm that improvement deterministically on disjoint seeds;
- *  3. remain non-inferior in a direct race against the current champion.
+ *  3. remain non-inferior against frozen Claude;
+ *  4. remain non-inferior in a direct race against the current champion.
  *
- * The Claude gate prevents the cyclic self-play failure where a mutation
- * learns to exploit copies of itself but becomes easier for the old bot.
+ * Fixed references prevent the cyclic self-play failure where a mutation
+ * learns to exploit copies of itself but becomes easier for an older bot.
  */
-function trainLoop(iters, deals) {
+function trainLoop(iters, deals, randomSeed = 7654321) {
   const start = { ...newBot.DEFAULT_WEIGHTS };
   let best = { ...start };
-  const rand = mulberry32(7654321);
+  const rand = mulberry32(randomSeed);
 
   for (let it = 0; it < iters; it++) {
     const { candidate, touched } = mutate(best, rand);
     const discoverySeed = 100000 + it * 1009;
-    const candidateDiscovery = raceClaude(
+    const candidateDiscovery = racePrevious(
       candidate,
       deals,
       discoverySeed,
       true
     );
-    const championDiscovery = raceClaude(best, deals, discoverySeed, true);
+    const championDiscovery = racePrevious(best, deals, discoverySeed, true);
     if (
       candidateDiscovery.pointRate <= 0.5 ||
       candidateDiscovery.pointRate <= championDiscovery.pointRate + 0.015
@@ -315,19 +356,36 @@ function trainLoop(iters, deals) {
     }
 
     const confirmSeed = 3000000 + it * 2003;
-    const candidateConfirm = raceClaude(
+    const candidateConfirm = racePrevious(
       candidate,
       deals * 2,
       confirmSeed,
       false
     );
-    const championConfirm = raceClaude(best, deals * 2, confirmSeed, false);
+    const championConfirm = racePrevious(best, deals * 2, confirmSeed, false);
     if (
       candidateConfirm.pointRate <= 0.5 ||
       candidateConfirm.pointRate <= championConfirm.pointRate + 0.005
     ) {
       continue;
     }
+
+    const claudeSeed = 4000000 + it * 2503;
+    const candidateClaude = raceClaude(candidate, deals * 2, claudeSeed);
+    const championClaude = raceClaude(best, deals * 2, claudeSeed);
+    if (
+      candidateClaude.pointRate < 0.5 ||
+      candidateClaude.pointRate < championClaude.pointRate - 0.005
+    ) {
+      continue;
+    }
+
+    const discipline = trumpDiscipline(
+      candidate,
+      Math.max(50, Math.ceil(deals / 2)),
+      4500000 + it * 2753
+    );
+    if (discipline.preserveRate < 0.9) continue;
 
     const direct = head2head(
       candidate,
@@ -341,8 +399,10 @@ function trainLoop(iters, deals) {
     best = candidate;
     console.log(
       `it ${String(it).padStart(3)} ACCEPT ${touched.join('+')} ` +
-        `(Claude explore ${percent(candidateDiscovery.pointRate)}, ` +
+        `(previous explore ${percent(candidateDiscovery.pointRate)}, ` +
         `confirm ${percent(candidateConfirm.pointRate)}, ` +
+        `Claude ${percent(candidateClaude.pointRate)}, ` +
+        `trumps ${percent(discipline.preserveRate)}, ` +
         `champion ${percent(direct.pointRate)})`
     );
     console.log(JSON.stringify(best));
@@ -350,7 +410,12 @@ function trainLoop(iters, deals) {
 
   console.log('\nUnseen validation');
   printRace('best vs starting policy', head2head(best, start, 1000, 7000000));
+  printRace('best vs previous smart bot', racePrevious(best, 1000, 7500000));
   printRace('best vs frozen Claude', raceClaude(best, 1000, 8000000));
+  const discipline = trumpDiscipline(best, 500, 8500000);
+  console.log(
+    `best early strong-trump preservation: ${percent(discipline.preserveRate)}`
+  );
   const old = vsOldBot(best, 1500, 500, 9000000);
   console.log(
     `best vs old bot: 2p wins ${percent(old.winRate2p)}, ` +
@@ -359,8 +424,83 @@ function trainLoop(iters, deals) {
   console.log('\nbest weights:\n' + JSON.stringify(best, null, 2));
 }
 
+function spendsStrongTrump(move, state) {
+  const cards =
+    move.type === 'attack' ? move.cards : move.type === 'defend' ? [move.card] : [];
+  return cards.some(
+    (card) =>
+      cardSuit(card) === state.trumpSuit &&
+      strength(card) >= newBot.DEFAULT_TRUMP_POLICY.strongMin
+  );
+}
+
+/**
+ * Measure the user-visible invariant directly. An "opportunity" is an
+ * early/mid-game decision where spending a strong trump is legal but at least
+ * one legal move preserves every strong trump.
+ */
+function trumpDiscipline(weights, games, seedBase) {
+  let opportunities = 0;
+  let preserved = 0;
+  let earlySpends = 0;
+  let unavoidableEarlySpends = 0;
+  let lateSpends = 0;
+
+  for (let game = 0; game < games; game++) {
+    const rng = mulberry32(seedBase + game);
+    const state = createGame(
+      [
+        { id: 'p0', name: 'P0', isBot: true },
+        { id: 'p1', name: 'P1', isBot: true },
+      ],
+      rng
+    );
+    let guard = 0;
+    while (state.phase !== 'over') {
+      if (++guard > 8000) throw new Error('non-terminating discipline game');
+      const actor = currentActor(state);
+      const move = newBot.chooseMove(state, actor.player, weights);
+      const early = state.talon.length > newBot.DEFAULT_TRUMP_POLICY.lateTalon;
+      const spent = spendsStrongTrump(move, state);
+
+      if (early) {
+        const moves = legalMoves(state, actor.player);
+        const canSpend = moves.some((candidate) =>
+          spendsStrongTrump(candidate, state)
+        );
+        const canPreserve = moves.some(
+          (candidate) => !spendsStrongTrump(candidate, state)
+        );
+        if (canSpend && canPreserve) {
+          opportunities++;
+          if (!spent) preserved++;
+        }
+        if (spent) {
+          earlySpends++;
+          if (!canPreserve) unavoidableEarlySpends++;
+        }
+      } else if (spent) {
+        lateSpends++;
+      }
+
+      applyMove(state, actor.player, move);
+    }
+  }
+
+  return {
+    opportunities,
+    preserved,
+    preserveRate: opportunities ? preserved / opportunities : 1,
+    earlySpends,
+    unavoidableEarlySpends,
+    lateSpends,
+  };
+}
+
 function benchmark(deals) {
-  console.log('Frozen benchmark: Claude policy from master 6d43539');
+  console.log(
+    'Frozen references: Claude policy from 6d43539; previous smart policy from da9b376'
+  );
   printRace(
     'current vs frozen Claude (2p)',
     raceClaude(newBot.DEFAULT_WEIGHTS, deals, 11000000)
@@ -368,6 +508,14 @@ function benchmark(deals) {
   printRace(
     'current vs frozen Claude (2p live styles/temp)',
     raceClaude(newBot.DEFAULT_WEIGHTS, deals, 11500000, true, 0.6)
+  );
+  printRace(
+    'current vs previous smart bot (2p)',
+    racePrevious(newBot.DEFAULT_WEIGHTS, deals, 11700000)
+  );
+  printRace(
+    'current vs previous smart bot (2p live styles/temp)',
+    racePrevious(newBot.DEFAULT_WEIGHTS, deals, 11800000, true, 0.6)
   );
   const three = multiplayerVsClaude(newBot.DEFAULT_WEIGHTS, 3, Math.ceil(deals / 4), 12000000);
   const four = multiplayerVsClaude(newBot.DEFAULT_WEIGHTS, 4, Math.ceil(deals / 4), 13000000);
@@ -384,11 +532,26 @@ function benchmark(deals) {
     `current vs old bot: 2p wins ${percent(old.winRate2p)}, ` +
       `draws ${percent(old.drawRate2p)}, 4p bürge ${percent(old.burgeRate4p)}`
   );
+  const discipline = trumpDiscipline(
+    newBot.DEFAULT_WEIGHTS,
+    Math.min(deals, 1000),
+    15000000
+  );
+  console.log(
+    `early strong-trump preservation: ${percent(discipline.preserveRate)} ` +
+      `(${discipline.preserved}/${discipline.opportunities} avoidable decisions preserved; ` +
+      `${discipline.unavoidableEarlySpends} unavoidable early spends; ` +
+      `${discipline.lateSpends} late spends)`
+  );
 }
 
 const cmd = process.argv[2];
 if (cmd === 'train') {
-  trainLoop(Number(process.argv[3]) || 40, Number(process.argv[4]) || 250);
+  trainLoop(
+    Number(process.argv[3]) || 40,
+    Number(process.argv[4]) || 250,
+    Number(process.argv[5]) || 7654321
+  );
 } else {
   benchmark(Number(process.argv[3]) || 2000);
 }

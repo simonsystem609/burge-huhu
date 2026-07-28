@@ -1,7 +1,13 @@
 'use strict';
 
 const assert = require('assert');
-const { chooseMove, chooseClaudeMove } = require('../game/bot');
+const {
+  chooseMove,
+  chooseClaudeMove,
+  choosePreviousMove,
+} = require('../game/bot');
+const { createGame, currentActor, applyMove } = require('../game/engine');
+const { cardSuit, strength } = require('../game/deck');
 
 function defenseState() {
   return {
@@ -70,4 +76,62 @@ const hiddenB = attackState(
 );
 assert.deepStrictEqual(chooseMove(hiddenA, 0), chooseMove(hiddenB, 0));
 
-console.log('✓ card bot plans full defenses and ignores hidden card identities.');
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function previousState(seed, predicate) {
+  const state = createGame(
+    [
+      { id: 'p0', name: 'P0', isBot: true },
+      { id: 'p1', name: 'P1', isBot: true },
+    ],
+    mulberry32(seed)
+  );
+  let guard = 0;
+  while (!predicate(state)) {
+    assert(++guard <= 8000, `seed ${seed} did not reach the regression state`);
+    const actor = currentActor(state);
+    applyMove(state, actor.player, choosePreviousMove(state, actor.player));
+  }
+  return state;
+}
+
+// Regression from a real seeded game: the old pair bonus put a strong trump
+// Alsó into a five-card early attack even though a trump-free lead existed.
+const earlyAttack = previousState(
+  8,
+  (state) => state.phase === 'attack' && state.turnCount === 3
+);
+const oldAttack = choosePreviousMove(earlyAttack, earlyAttack.attacker);
+const reservedAttack = chooseMove(earlyAttack, earlyAttack.attacker);
+assert(
+  oldAttack.cards.some(
+    (card) => cardSuit(card) === earlyAttack.trumpSuit && strength(card) >= 3
+  )
+);
+assert(
+  reservedAttack.cards.every((card) => cardSuit(card) !== earlyAttack.trumpSuit)
+);
+
+// Another reproduced game: the previous planner spent trump Alsó even though
+// a same-suit Felső could continue the defense. The guarded policy preserves
+// the strong trump and chooses the ordinary beater.
+const earlyDefense = previousState(
+  6,
+  (state) => state.phase === 'defense' && state.turnCount === 4
+);
+const oldDefense = choosePreviousMove(earlyDefense, earlyDefense.defender);
+const reservedDefense = chooseMove(earlyDefense, earlyDefense.defender);
+assert.deepStrictEqual(oldDefense, { type: 'defend', slot: 1, card: 'piros-Also' });
+assert.deepStrictEqual(reservedDefense, { type: 'defend', slot: 2, card: 'makk-Felso' });
+
+console.log(
+  '✓ card bot plans defenses, ignores hidden cards, and preserves early trumps.'
+);

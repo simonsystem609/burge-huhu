@@ -54,7 +54,9 @@ const CLAUDE_WEIGHTS = Object.freeze({
   probExp: 6, // convexity of the forced-pickup bet: only near-certainty pays
 });
 
-const DEFAULT_WEIGHTS = {
+// Exact weights used by the smart bot pushed in da9b376. Keep this object
+// frozen so future live tuning cannot silently move the benchmark opponent.
+const PREVIOUS_WEIGHTS = Object.freeze({
   ...CLAUDE_WEIGHTS,
   // Retuned in paired two-player league races after defense became a
   // whole-exchange plan. The old 3.92 value was learned under a greedy
@@ -67,7 +69,29 @@ const DEFAULT_WEIGHTS = {
   // useful cards and everyone can still refill.
   fillForceTake: 1,
   fillProbExp: 1,
+});
+
+// Live weights: candidate discovered by a multi-reference league search, then
+// promoted only after fresh-seed validation against PREVIOUS_WEIGHTS, Claude,
+// the old heuristic, and multiplayer holdouts.
+const DEFAULT_WEIGHTS = {
+  ...PREVIOUS_WEIGHTS,
+  fillShed: 1.8366454424784844,
+  giveQuality: 0.7932818906477571,
+  usePair: 13.486905845820495,
+  skipTurn: 13.853760637371977,
+  forceTake: 18.808373408791844,
+  probExp: 5.838741520611482,
 };
+
+const DEFAULT_TRUMP_POLICY = Object.freeze({
+  // Four cards in the talon is the start of the late game. Before that, keep
+  // every trump when a non-trump lead exists and heavily protect X-or-higher
+  // trumps during defense.
+  lateTalon: 4,
+  strongMin: 3, // X (strength 3), Alsó, Felső, Király, Ász
+  reservePenalty: 40,
+});
 
 // Bot personalities: weight multipliers giving each bot a temperament.
 // 'balanced' plays the trained optimum; the others trade a little strength
@@ -94,6 +118,30 @@ function applyStyle(base, style) {
   const w = { ...base };
   for (const k in mult) w[k] = w[k] * mult[k];
   return w;
+}
+
+function isTrump(card, trumpSuit) {
+  return cardSuit(card) === trumpSuit;
+}
+
+function isStrongTrump(card, trumpSuit, policy) {
+  return isTrump(card, trumpSuit) && strength(card) >= policy.strongMin;
+}
+
+/**
+ * Early/mid-game attack discipline:
+ *  - if any non-trump lead exists, do not send a trump;
+ *  - once only a few talon cards remain, release that restriction.
+ *
+ * A single card is always a legal lead, so this only spends an early trump
+ * when the hand contains no non-trump at all.
+ */
+function preserveTrumpAttackMoves(moves, state, policy) {
+  if (state.talon.length <= policy.lateTalon) return moves;
+  const withoutTrumps = moves.filter(
+    (move) => move.cards.every((card) => !isTrump(card, state.trumpSuit))
+  );
+  return withoutTrumps.length > 0 ? withoutTrumps : moves;
 }
 
 /**
@@ -336,8 +384,11 @@ function pickupSetGain(cards, hand, trumpSuit, race, W) {
   return gain;
 }
 
-function defenseCardBaseGain(card, trumpSuit, race, W) {
-  const cost = quality(card, trumpSuit, W) * W.spend;
+function defenseCardBaseGain(card, trumpSuit, race, W, policy, reserveStrongTrumps) {
+  let cost = quality(card, trumpSuit, W) * W.spend;
+  if (reserveStrongTrumps && isStrongTrump(card, trumpSuit, policy)) {
+    cost += policy.reservePenalty;
+  }
   return W.deny + (race ? W.raceBeat : 0) - cost;
 }
 
@@ -350,7 +401,7 @@ function defenseCardBaseGain(card, trumpSuit, race, W) {
  * five-bit dynamic program. That keeps the search exact while bounding it by
  * the number of attack slots rather than the defender's (possibly huge) hand.
  */
-function choosePlannedDefense(state, hand, trumpSuit, race, W) {
+function choosePlannedDefense(state, hand, trumpSuit, race, W, policy, preserveTrumps) {
   const open = [];
   state.table.slots.forEach((slot, i) => {
     if (slot.defense == null) open.push({ attack: slot.attack, slot: i });
@@ -395,7 +446,15 @@ function choosePlannedDefense(state, hand, trumpSuit, race, W) {
         visit(
           cardIndex + 1,
           mask | bit,
-          score + defenseCardBaseGain(card, trumpSuit, race, W),
+          score +
+            defenseCardBaseGain(
+              card,
+              trumpSuit,
+              race,
+              W,
+              policy,
+              preserveTrumps && state.talon.length > policy.lateTalon
+            ),
           moves.concat({ type: 'defend', slot: open[oi].slot, card }),
           usedCards.concat(card)
         );
@@ -484,9 +543,22 @@ function chooseExploratoryAttack(scored, state, temp, rng) {
   return candidates[candidates.length - 1].m;
 }
 
-function chooseMoveInternal(state, playerIndex, weights, opts, claudePolicy) {
+function chooseMoveInternal(state, playerIndex, weights, opts, policyName) {
   const o = opts || {};
-  let W = weights || (claudePolicy ? CLAUDE_WEIGHTS : DEFAULT_WEIGHTS);
+  const claudePolicy = policyName === 'claude';
+  const previousPolicy = policyName === 'previous';
+  const preserveTrumps = policyName === 'live';
+  const trumpPolicy = {
+    ...DEFAULT_TRUMP_POLICY,
+    ...(o.trumpPolicy || {}),
+  };
+  let W =
+    weights ||
+    (claudePolicy
+      ? CLAUDE_WEIGHTS
+      : previousPolicy
+        ? PREVIOUS_WEIGHTS
+        : DEFAULT_WEIGHTS);
   if (o.style) W = applyStyle(W, o.style);
   const temp = o.temp || 0;
   const rng = o.rng || Math.random;
@@ -502,7 +574,10 @@ function chooseMoveInternal(state, playerIndex, weights, opts, claudePolicy) {
   const swapMove = moves.find((m) => m.type === 'swap7');
   if (swapMove) return swapMove;
 
-  const attackMoves = moves.filter((m) => m.type === 'attack');
+  let attackMoves = moves.filter((m) => m.type === 'attack');
+  if (preserveTrumps) {
+    attackMoves = preserveTrumpAttackMoves(attackMoves, state, trumpPolicy);
+  }
   if (attackMoves.length > 0) {
     const unseen = unseenCards(state, playerIndex);
     const { pool, certain } = defenderPool(state, playerIndex, unseen);
@@ -586,7 +661,15 @@ function chooseMoveInternal(state, playerIndex, weights, opts, claudePolicy) {
 
   // ── Defense ──────────────────────────────────────────────────────
   if (!claudePolicy) {
-    return choosePlannedDefense(state, hand, trumpSuit, race, W);
+    return choosePlannedDefense(
+      state,
+      hand,
+      trumpSuit,
+      race,
+      W,
+      trumpPolicy,
+      preserveTrumps
+    );
   }
 
   // Greedy per-slot choice: beat the slot where beating clearly pays off
@@ -617,18 +700,26 @@ function chooseMoveInternal(state, playerIndex, weights, opts, claudePolicy) {
 }
 
 function chooseMove(state, playerIndex, weights, opts) {
-  return chooseMoveInternal(state, playerIndex, weights, opts, false);
+  return chooseMoveInternal(state, playerIndex, weights, opts, 'live');
 }
 
 /** Exact pre-improvement policy retained for seeded A/B races. */
 function chooseClaudeMove(state, playerIndex, weights, opts) {
-  return chooseMoveInternal(state, playerIndex, weights, opts, true);
+  return chooseMoveInternal(state, playerIndex, weights, opts, 'claude');
+}
+
+/** Exact da9b376 policy retained for regression races. */
+function choosePreviousMove(state, playerIndex, weights, opts) {
+  return chooseMoveInternal(state, playerIndex, weights, opts, 'previous');
 }
 
 module.exports = {
   chooseMove,
   chooseClaudeMove,
+  choosePreviousMove,
   DEFAULT_WEIGHTS,
+  PREVIOUS_WEIGHTS,
   CLAUDE_WEIGHTS,
+  DEFAULT_TRUMP_POLICY,
   PERSONALITIES,
 };

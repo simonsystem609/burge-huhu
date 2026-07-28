@@ -133,15 +133,17 @@ npm run test:server   # live socket guards and resume-abuse checks
 npm run test:resume   # token lifecycle and normal reload/rejoin checks
 npm run test:membership # claim takeover, self-join, queue, and cross-game checks
 npm run dev      # auto-restart on file changes
-node scripts/train-bot.js benchmark 2000 # paired race vs frozen Claude bot
-node scripts/train-bot.js train 40 250   # exploratory 2-player league training
+node scripts/train-bot.js benchmark 2000 # paired races vs fixed reference bots
+node scripts/train-bot.js train 40 250 [seed] # exploratory 2-player league training
 ```
 
 Training uses mirrored two-player deals so both policies receive every seat. Random
 personality and temperature exploration is allowed during candidate discovery, but
-an improvement is accepted only after deterministic validation against the frozen
-Claude policy and the current champion on separate seeds. Three- and four-player
-games are holdout checks, not the learning arena.
+an improvement is accepted only after deterministic validation against the previous
+smart policy, the frozen Claude policy, and the current champion on separate seeds.
+Three- and four-player games are holdout checks, not the learning arena. The
+benchmark also measures whether the live policy preserves strong trumps before the
+last four talon cards.
 
 CI runs the card, Ur, bot, socket, resume, and membership-security tests plus
 `npm run lint` on every push via GitHub Actions. Its full dependency-tree audit
